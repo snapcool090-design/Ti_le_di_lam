@@ -1,0 +1,3445 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <base target="_top">
+  <title>Khảo sát đi làm</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- Include CSS -->
+  <?!= include('css.html'); ?>
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+
+<body>
+  <div id="app">
+    <!-- Login Section -->
+    <div id="login-section" class="login-container">
+      <div class="login-header">
+        <div class="company-name">CNC PQC 3P</div>
+        <div class="app-title">KHẢO SÁT ĐI LÀM</div>
+      </div>
+
+      <form id="login-form" class="login-form">
+        <div class="form-group">
+          <label for="gen-code"><i class="fas fa-id-card"></i> Gen ID</label>
+          <input
+            type="text"
+            id="gen-code"
+            class="form-control"
+            placeholder="Nhập mã GEN (8 chữ số)"
+            maxlength="8"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            oninput="restrictToNumbers(this); checkGenCodeRealTime()"
+            required
+          >
+        </div>
+
+        <div class="form-group">
+          <label for="user-name-display"><i class="fas fa-user"></i> Tên nhân viên</label>
+          <input
+            type="text"
+            id="user-name-display"
+            class="form-control"
+            placeholder="Tự động hiển thị khi nhập GEN hợp lệ"
+            readonly
+          >
+        </div>
+
+        <div id="login-message" style="display:none;"></div>
+
+        <button type="submit" class="btn btn-primary" id="login-btn" disabled>
+          <i class="fas fa-sign-in-alt"></i>
+          <span id="login-text">ĐĂNG NHẬP</span>
+          <div id="login-loading" class="loading" style="display: none;"></div>
+        </button>
+      </form>
+    </div>
+
+    <!-- Main App Section (hidden by default) -->
+    <div id="app-section" class="container" style="display: none;">
+      <!-- Header with User Info -->
+      <div class="header">
+        <h1>KHẢO SÁT ĐI LÀM</h1>
+        <p>  </p>
+      </div>
+
+      <!-- User Info Bar -->
+      <div class="user-info">
+        <div class="welcome" style="text-align:left;">
+          Xin chào:
+          <span id="user-gen"></span> -
+          <span id="user-name"></span>
+          <span id="user-role" hidden></span> <!-- 👈 an toàn, gọn -->
+        </div>
+        <button class="btn btn-danger logout-btn" onclick="logout()">
+          <i class="fas fa-sign-out-alt"></i> Đăng Xuất
+        </button>
+      </div>
+
+      <!-- Tabs Navigation -->
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="survey" onclick="showTab('survey')">
+          <i class="fas fa-edit"></i> Khảo Sát
+        </button>
+        <button class="tab-btn" data-tab="results" onclick="showTab('results')">
+          <i class="fas fa-search"></i> Kết Quả
+        </button>
+        <button class="tab-btn" data-tab="history" onclick="showTab('history')">
+          <i class="fas fa-history"></i> Tra Cứu
+        </button>
+        <button class="tab-btn" id="admin-tab" data-tab="admin" onclick="showTab('admin')">
+          <i class="fas fa-chart-bar"></i> Quản Trị
+        </button>
+      </div>
+
+
+      <!-- Survey Tab -->
+      <div id="survey" class="tab-content active">
+        <div class="survey-container">
+          <h2>Phiếu Khảo Sát</h2>
+          <form id="survey-form">
+            <div id="questions-container">
+              <!-- Dynamic questions will be loaded here -->
+            </div>
+
+            <div class="form-group" style="margin-top: var(--space-xl);">
+              <button type="submit" class="btn btn-success" id="submit-survey-btn">
+                <span id="submit-text">📤 Gửi Kết Quả</span>
+                <div id="submit-loading" class="loading" style="display: none;"></div>
+              </button>
+            </div>
+          </form>
+
+          <div id="survey-message" class="status-message" style="display: none;"></div>
+        </div>
+      </div>
+
+<!-- Results Tab -->
+<div id="results" class="tab-content">
+  <div class="stats-container">
+    <h2>Thống Kê Kết Quả</h2>
+
+    <!-- Filter Section -->
+    <div class="filter-section" style="margin-bottom: var(--space-lg);">
+      <div style="display: flex; gap: var(--space-md); align-items: center;">
+        <div style="display: flex; align-items: center; gap: var(--space-sm);">
+          <label for="stats-date" style="white-space: nowrap; margin: 0;">Ngày:</label>
+          <input 
+            type="date" 
+            id="stats-date" 
+            class="stats-filter-control" 
+            style="width: 130px; margin: 0;"
+          >
+        </div>
+        <div style="display: flex; align-items: center; gap: var(--space-sm);">
+          <label for="stats-shift" style="white-space: nowrap; margin: 0;">Ca:</label>
+          <select id="stats-shift" class="stats-filter-control" style="width: 100px; margin: 0;">
+            <option value="day">Ca ngày</option>
+            <option value="night">Ca đêm</option>
+            <option value="all">Cả ngày</option>
+          </select>
+        </div>
+      </div>
+      <!-- Cập nhật dòng này để căn giữa nút Tìm kiếm -->
+      <div style="margin-top: var(--space-md); display: flex; justify-content: center;">
+        <button class="btn btn-primary" onclick="loadStatistics()" style="white-space: nowrap;">
+          🔍 Tìm kiếm
+        </button>
+      </div>
+    </div>
+
+    <div id="stats-loading" class="loading" style="margin: 20px auto; display: none;"></div>
+    <div id="stats-table-container" style="display: none;">
+      <!-- Dynamic statistics table will be loaded here -->
+    </div>
+  </div>
+</div>
+
+<!-- History Tab (Tra Cứu) -->
+<div id="history" class="tab-content">
+  <div class="stats-container">
+    <h2>Tra Cứu Lịch Sử</h2>
+
+    <!-- Filter Section -->
+    <div class="filter-section" style="margin-bottom: var(--space-lg);">
+<!-- Dòng 1: Từ ngày + Đến ngày -->
+      <div style="display: flex; gap: var(--space-md); align-items: center;">
+        <div style="display: flex; align-items: center; gap: var(--space-sm);">
+          <label for="history-date-from" style="white-space: nowrap; margin: 0;">Từ:</label>
+          <input
+            type="date"
+            id="history-date-from"
+            class="stats-filter-control"
+            style="width: 140px; margin: 0;"
+          >
+        </div>
+        <div style="display: flex; align-items: center; gap: var(--space-sm);">
+          <label for="history-date-to" style="white-space: nowrap; margin: 0;">Đến:</label>
+          <input
+            type="date"
+            id="history-date-to"
+            class="stats-filter-control"
+            style="width: 140px; margin: 0;"
+          >
+        </div>
+      </div>
+      <!-- Dòng 2: GEN (leader/admin) - dòng riêng phía dưới -->
+      <div id="history-gen-wrapper" style="display: none; align-items: center; gap: var(--space-sm); margin-top: var(--space-sm);">
+        <label for="history-gen-input" style="white-space: nowrap; margin: 0;">GEN:</label>
+        <input
+          type="text"
+          id="history-gen-input"
+          class="stats-filter-control"
+          style="width: 120px; margin: 0;"
+          placeholder="GEN"
+          maxlength="8"
+          inputmode="numeric"
+          oninput="restrictToNumbers(this)"
+        >
+      </div>
+      <!-- Dòng 2: Nút Tìm kiếm + Export (căn giữa) -->
+      <div style="margin-top: var(--space-md); display: flex; justify-content: center; gap: var(--space-md);">
+        <button class="btn btn-primary" onclick="searchHistory()" style="white-space: nowrap;">
+          🔍 Tìm kiếm
+        </button>
+        <button class="btn btn-success" id="export-survey-btn" onclick="exportSurveyResults(this)" style="white-space: nowrap; display: none;">
+          <span class="btn-text">📥 Export Excel</span>
+          <div class="btn-loading" style="display: none;"></div>
+        </button>
+      </div>
+    </div>
+
+    <div id="history-loading" class="loading" style="margin: 20px auto; display: none;"></div>
+    <div id="history-results" style="display: none;"></div>
+    <div id="history-export-message" class="status-message" style="display: none; margin-top: 8px;"></div>
+  </div>
+</div>
+
+<!-- Admin Tab -->
+<div id="admin" class="tab-content">
+  <!-- Phần 1: Xử lý GEN code -->
+  <div class="section-container" style="margin-bottom: var(--space-xl);">
+    <div class="admin-panel">
+      <h2>Update Information</h2>
+      
+      <div class="form-group">
+        <label for="admin-gen-input">Nhập GEN nhân viên:</label>
+        <textarea
+          id="admin-gen-input"
+          class="admin-textarea"
+          placeholder="Ví dụ: 12345678;12345769;.."
+          style="width: 100%; min-height: 50px; padding: 12px; border: 1px solid #ddd; border-radius: 4px; font-family: inherit; resize: vertical;"
+        ></textarea>
+      </div>
+
+    <div class="admin-actions">
+      <button class="btn btn-primary" onclick="handleSupport(this)">
+        <span class="btn-text">Đi support</span>
+        <div class="btn-loading" style="display: none;"></div>
+      </button>
+      <button class="btn btn-danger" onclick="handleResign(this)">
+        <span class="btn-text">Nghỉ việc</span>
+        <div class="btn-loading" style="display: none;"></div>
+      </button>
+      <button class="btn btn-success" onclick="handleUpdate(this)">
+        <span class="btn-text">Update</span>
+        <div class="btn-loading" style="display: none;"></div>
+      </button>
+      <button class="btn" onclick="clearAdminInput()" style="background: #6c757d; color: white;">Clear</button>
+    </div>
+
+      <div id="admin-action-message" class="status-message" style="display: none; margin-top: var(--space-md);"></div>
+    </div>
+  </div>
+
+  <!-- Phần 1b: Export danh sách nhân viên -->
+  <div class="section-container" style="margin-bottom: var(--space-xl);">
+    <div class="admin-panel">
+      <h2>Export Danh Sách Nhân Viên</h2>
+      <p style="color: var(--text-light); margin-bottom: var(--space-md);">Xuất file Excel chứa: Name, Gen, Leader_code, Leader_name (tất cả nhân viên đang làm việc)</p>
+      <div class="admin-actions">
+        <button class="btn btn-success" id="export-employees-btn" onclick="exportAllEmployees(this)">
+          <span class="btn-text">📥 Export Excel</span>
+          <div class="btn-loading" style="display: none;"></div>
+        </button>
+      </div>
+      <div id="export-employees-message" class="status-message" style="display: none; margin-top: var(--space-md);"></div>
+    </div>
+  </div>
+
+  <!-- Phần 2: Báo cáo theo ngày -->
+  <div class="section-container">
+    <div class="admin-panel">
+      <h2>Daily Report</h2>
+      
+      <!-- Filter Section -->
+      <div class="filter-section" style="margin-bottom: var(--space-lg);">
+        <div style="display: flex; gap: var(--space-md); align-items: center; flex-wrap: nowrap;">
+          <div style="display: flex; align-items: center; gap: var(--space-sm);">
+            <label for="admin-date" style="white-space: nowrap; margin: 0;">Ngày:</label>
+            <input 
+              type="date" 
+              id="admin-date" 
+              class="form-control" 
+              style="width: 150px; margin: 0;"
+            >
+          </div>
+          <button class="btn btn-primary" onclick="loadAdminReport()" style="white-space: nowrap; margin: 0;">
+            🔍 Tìm kiếm
+          </button>
+        </div>
+      </div>
+
+      <!-- Báo cáo sẽ được tải ở đây -->
+      <div id="admin-report-container">
+        <!-- Nội dung báo cáo sẽ được điền bằng JavaScript -->
+      </div>
+    </div>
+  </div>
+</div>
+
+      <!-- Confirm leader change modal -->
+      <div id="confirm-leader-modal" class="modal-overlay">
+        <div class="modal">
+          <h3>🔁 Xác nhận thay đổi Leader</h3>
+          <p id="confirm-leader-message"></p>
+          <div style="margin-top: var(--space-lg); display:flex; gap: var(--space-md); justify-content: center;">
+            <button id="confirm-leader-yes" class="btn btn-success">Xác nhận</button>
+            <button id="confirm-leader-no" class="btn">Hủy</button>
+          </div>
+        </div>
+      </div>
+
+<!-- Employee Detailed Modal (updated layout) -->
+<div id="employee-detailed-modal" class="modal-overlay">
+  <div class="modal">
+    <!-- Header lines (these are dynamically populated by displayEmployeeDetailedList) -->
+    <div id="employee-detailed-headers" style="margin-bottom: 12px; text-align: left;">
+    </div>
+
+    <!-- Action row: Copy and Close (on same line) -->
+    <div style="display:flex; justify-content:center; gap:12px; align-items:center; margin-bottom: 12px;">
+      <button class="btn btn-primary" id="modal-copy-btn" onclick="copyModalContent()" style="padding:8px 12px; font-size:14px;">
+        📋 Copy
+      </button>
+      <button class="btn" id="modal-close-btn" onclick="closeEmployeeDetailedModal()" style="padding:8px 12px; font-size:14px; background:#6c757d; color:#fff;">
+        ❌ Đóng
+      </button>
+    </div>
+    <div id="employee-detailed-action-note" style="margin-top:8px; text-align:center;"></div>
+
+    <!-- Table container - CSS xử lý sticky + overflow -->
+    <div id="employee-detailed-table-container" style="border-top:1px solid #eee;">
+      <!-- displayEmployeeDetailedList should render here the table with headers and rows -->
+      <div id="employee-detailed-content">
+      </div>
+    </div>
+
+    <!-- Keep small margin and close action area if you want extra controls -->
+  </div>
+</div>
+
+      <script>
+        // ===== GLOBAL VARIABLES =====
+    let currentUser = null;
+    let currentQuestions = [];
+    let adminUnlocked = false;
+
+    // ===== INITIALIZATION =====
+  document.addEventListener('DOMContentLoaded', function() {
+    checkAutoLogin();
+    initializeEventListeners();
+    initializeDatePickers(); // 🔴 THÊM DÒNG NÀY
+  });
+
+    // ===== AUTO LOGIN LOGIC =====
+function checkAutoLogin() {
+  const savedUser = localStorage.getItem('user_data');
+  
+  if (savedUser) {
+    try {
+      currentUser = JSON.parse(savedUser);
+      showMainApp();
+      loadSurveyData();
+    } catch (error) {
+      console.error('Error parsing saved user:', error);
+      logout();
+    }
+  } else {
+    showLoginForm();
+    // 🔴 ĐẢM BẢO CLEAR MESSAGE KHI CHƯA ĐĂNG NHẬP
+    const surveyMessage = document.getElementById('survey-message');
+    if (surveyMessage) {
+      surveyMessage.style.display = 'none';
+      surveyMessage.textContent = '';
+    }
+  }
+}
+// ===== SHIFT SELECTION FUNCTIONS =====
+
+/**
+ * Xác định ca mặc định dựa trên giờ hiện tại của client
+ * Trước 15:00:00 -> Ca ngày, từ 15:00:01 -> Ca đêm
+ */
+function getDefaultShift() {
+  const now = new Date();
+  const hours = now.getHours();
+  const minutes = now.getMinutes();
+  const seconds = now.getSeconds();
+  
+  // Tính tổng giây từ 00:00:00
+  const totalSeconds = hours * 3600 + minutes * 60 + seconds;
+  
+  // 15:00:00 = 15 * 3600 = 54000 giây
+  return totalSeconds < 54000 ? 'day' : 'night';
+}
+
+/**
+ * Khởi tạo shift selector với giá trị mặc định
+ */
+function initializeShiftSelector() {
+  const shiftSelect = document.getElementById('stats-shift');
+  if (shiftSelect) {
+    const defaultShift = getDefaultShift();
+    shiftSelect.value = defaultShift;
+    console.log(`Auto-selected shift: ${defaultShift} (current time: ${new Date().toLocaleTimeString()})`);
+  }
+}
+    // ===== EVENT LISTENERS =====
+    function initializeEventListeners() {
+      // Login form
+      document.getElementById('login-form').addEventListener('submit', handleLogin);
+      
+      // Survey form
+      document.getElementById('survey-form').addEventListener('submit', handleSurveySubmit);
+    }
+
+    // ===== LOGIN HANDLING =====
+function handleLogin(event) {
+  event.preventDefault();
+  
+  const genCode = document.getElementById('gen-code').value.trim();
+  const loginBtn = document.getElementById('login-btn');
+  const loginText = document.getElementById('login-text');
+  const loginLoading = document.getElementById('login-loading');
+  
+  // Validate GEN code format
+  if (!genCode || !/^\d{8}$/.test(genCode)) {
+    showMessage('login-message', 'Vui lòng nhập mã GEN đúng 8 chữ số', 'error');
+    return;
+  }
+  
+  // Show loading
+  loginText.textContent = 'Đang đăng nhập...';
+  loginLoading.style.display = 'inline-block';
+  loginBtn.disabled = true;
+  
+  google.script.run
+    .withSuccessHandler(function(userData) {
+      loginSuccess(userData);
+    })
+    .withFailureHandler(function(error) {
+      loginFailed(error);
+    })
+    .checkGenCode(genCode);
+}
+
+// ---- Thay thế loginSuccess với logic kiểm tra mật khẩu admin ----
+function loginSuccess(userData) {
+  // userData is object returned from server via checkGenCode
+  currentUser = userData;
+  // store base user data but do not yet mark admin unlocked
+  try {
+    localStorage.setItem('user_data', JSON.stringify(userData));
+  } catch (e) {
+    console.warn('Could not persist user_data to localStorage', e);
+  }
+  // reset admin_unlocked to false by default on fresh login
+  try {
+    localStorage.setItem('admin_unlocked', 'false');
+  } catch (e) {}
+
+  // If role is admin -> require password modal before granting admin rights
+  if (currentUser && currentUser.role === 'admin') {
+    // show modal to request password; if user confirms and password ok -> unlock admin
+    showAdminPasswordModal(currentUser.gen);
+  } else {
+    // Non-admin (leader/user): proceed normally
+    finalizeLoginAndEnterApp(false); // not unlocked admin
+  }
+
+  // Reset login button state UI
+  const loginBtn = document.getElementById('login-btn');
+  const loginText = document.getElementById('login-text');
+  const loginLoading = document.getElementById('login-loading');
+  if (loginText) loginText.textContent = 'ĐĂNG NHẬP';
+  if (loginLoading) loginLoading.style.display = 'none';
+  if (loginBtn) loginBtn.disabled = false;
+}
+
+// ---- Hàm đóng / mở modal password admin (tạo DOM động) ----
+function showAdminPasswordModal(genCode) {
+  // ensure any existing modal removed
+  const existing = document.getElementById('admin-password-modal');
+  if (existing) existing.parentNode.removeChild(existing);
+
+  // Build modal HTML (uses styles already in CSS)
+  const modalHtml = `
+    <div id="admin-password-modal" class="modal-overlay active" style="z-index:2000;">
+      <div class="modal" style="max-width:420px;">
+        <h3>🔒 Xác thực Admin</h3>
+        <p>Vui lòng nhập mật khẩu:</p>
+        <div style="margin-top:8px;">
+          <input id="admin-password-input" type="password" class="form-control" placeholder="Nhập mật khẩu Admin" style="width:100%; box-sizing:border-box; margin-bottom:8px;">
+          <div id="admin-password-error" style="color:#ea4335; margin-bottom:8px; display:none;"></div>
+        </div>
+        <div style="display:flex; gap:12px; justify-content:center; margin-top:12px;">
+          <button id="admin-password-confirm" class="btn btn-success">Xác nhận</button>
+          <button id="admin-password-skip" class="btn">Bỏ qua</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // append to body
+  const tmp = document.createElement('div');
+  tmp.innerHTML = modalHtml;
+  document.body.appendChild(tmp.firstElementChild);
+
+  // bind events
+  const confirmBtn = document.getElementById('admin-password-confirm');
+  const skipBtn = document.getElementById('admin-password-skip');
+  const inputEl = document.getElementById('admin-password-input');
+  const errorEl = document.getElementById('admin-password-error');
+  const modalOverlay = document.getElementById('admin-password-modal');
+
+  // clicking outside modal or pressing Escape => treat as Skip
+  modalOverlay.addEventListener('click', function(e) {
+    if (e.target === modalOverlay) {
+      // user clicked overlay
+      demoteToLeaderAndProceed('closed');
+    }
+  });
+
+  document.addEventListener('keydown', function onEsc(e) {
+    if (e.key === 'Escape') {
+      // remove listener and treat as skip
+      document.removeEventListener('keydown', onEsc);
+      demoteToLeaderAndProceed('esc');
+    }
+  });
+
+  confirmBtn.onclick = function() {
+    const pw = (inputEl.value || '').toString();
+    if (!pw) {
+      errorEl.style.display = 'block';
+      errorEl.textContent = 'Vui lòng nhập mật khẩu';
+      return;
+    }
+    // disable confirm while checking
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = 'Đang kiểm tra...';
+
+    // call server to verify password
+    google.script.run
+      .withSuccessHandler(function(resp) {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Xác nhận';
+        // resp: { success: true, matched: bool, hasPassword: bool } or { success:false, error }
+        if (!resp) {
+          errorEl.style.display = 'block';
+          errorEl.textContent = 'Lỗi máy chủ. Vui lòng thử lại.';
+          return;
+        }
+        if (!resp.success) {
+          // treat server error (e.g., gen not found) as demote
+          errorEl.style.display = 'block';
+          errorEl.textContent = 'Lỗi xác thực: ' + (resp.error || 'Không xác định') + '. Bạn sẽ vào với quyền Leader.';
+          // small delay then demote
+          setTimeout(function() { demoteToLeaderAndProceed('server_error'); }, 1200);
+          return;
+        }
+        if (!resp.hasPassword) {
+          // no password stored -> demote to leader
+          errorEl.style.display = 'block';
+          errorEl.textContent = 'Tài khoản không có mật khẩu. Chuyển thành Leader.';
+          setTimeout(function() { demoteToLeaderAndProceed('no_password'); }, 900);
+          return;
+        }
+        if (resp.matched) {
+          // success -> unlock admin and proceed
+          try {
+            localStorage.setItem('admin_unlocked', 'true');
+          } catch (e) {}
+          // ensure currentUser.role remains 'admin'
+          if (currentUser) currentUser.role = 'admin';
+          closeAdminPasswordModal();
+          finalizeLoginAndEnterApp(true);
+        } else {
+          errorEl.style.display = 'block';
+          errorEl.textContent = 'Mật khẩu không đúng. Vui lòng thử lại hoặc chọn Bỏ qua để vào với quyền Leader.';
+          // keep modal open for retry
+        }
+      })
+      .withFailureHandler(function(err) {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Xác nhận';
+        errorEl.style.display = 'block';
+        errorEl.textContent = 'Lỗi kết nối. Vui lòng thử lại hoặc Bỏ qua.';
+      })
+      .verifyAdminPassword(genCode, pw);
+  };
+
+  skipBtn.onclick = function() {
+    demoteToLeaderAndProceed('skip_button');
+  };
+
+  // focus input
+  setTimeout(function() {
+    if (inputEl) inputEl.focus();
+  }, 200);
+}
+
+function closeAdminPasswordModal() {
+  const modal = document.getElementById('admin-password-modal');
+  if (modal) {
+    modal.classList.remove('active');
+    try { modal.parentNode.removeChild(modal); } catch (e) {}
+  }
+}
+
+// demote user to leader role and proceed into app (hide admin tab)
+function demoteToLeaderAndProceed(reason) {
+  // set admin_unlocked = false
+  try {
+    localStorage.setItem('admin_unlocked', 'false');
+  } catch (e) {}
+  // change currentUser.role to 'leader' if currentUser exists and had been admin
+  if (currentUser && currentUser.role === 'admin') {
+    currentUser.role = 'leader';
+    try { localStorage.setItem('user_data', JSON.stringify(currentUser)); } catch (e) {}
+  }
+  // close modal if open
+  closeAdminPasswordModal();
+  // proceed into app but with reduced rights (finalize login)
+  finalizeLoginAndEnterApp(false);
+}
+
+// finalize login and show main app; expects adminUnlocked boolean
+function finalizeLoginAndEnterApp(adminUnlocked) {
+  // if adminUnlocked is boolean true -> grant admin tab
+  try {
+    // if adminUnlocked === true then mark localStorage accordingly (already set earlier when matched)
+    if (adminUnlocked) {
+      try { localStorage.setItem('admin_unlocked', 'true'); } catch (e) {}
+    } else {
+      try { localStorage.setItem('admin_unlocked', 'false'); } catch (e) {}
+    }
+  } catch (e) {}
+
+  // showMainApp will read currentUser.role and localStorage to decide which tabs to show
+  // Ensure currentUser.role is set appropriately (if adminUnlocked true, keep admin; otherwise promote to leader previously)
+  // showMainApp uses currentUser.role to show/hide tabs
+  showMainApp();
+  loadSurveyData();
+}
+
+function loginFailed(error) {
+  const loginBtn = document.getElementById('login-btn');
+  const loginText = document.getElementById('login-text');
+  const loginLoading = document.getElementById('login-loading');
+  loginText.textContent = 'ĐĂNG NHẬP';
+  loginLoading.style.display = 'none';
+  if (loginBtn) loginBtn.disabled = false;
+  showMessage('login-message', error.message || 'Lỗi đăng nhập', 'error', 5000);
+}
+
+    // ===== UI MANAGEMENT =====
+    function showLoginForm() {
+      document.getElementById('login-section').style.display = 'block';
+      document.getElementById('app-section').style.display = 'none';
+    }
+
+function showMainApp() {
+  document.getElementById('login-section').style.display = 'none';
+  document.getElementById('app-section').style.display = 'block';
+  
+  // Update user info
+  document.getElementById('user-name').textContent = currentUser.name;
+  document.getElementById('user-gen').textContent = currentUser.gen;
+  
+  // Ẩn tất cả các tab trước
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.style.display = 'none';
+  });
+  
+  // Hiển thị tab theo role
+  const surveyTab = document.querySelector('.tab-btn[data-tab="survey"]');
+  const resultsTab = document.querySelector('.tab-btn[data-tab="results"]');
+  const adminTab = document.querySelector('.tab-btn[data-tab="admin"]');
+  
+  // Tab Khảo sát luôn hiển thị cho tất cả users
+  if (surveyTab) surveyTab.style.display = 'block';
+  
+  // Tab Kết quả: hiển thị cho leader và admin
+  if (resultsTab && (currentUser.role === 'leader' || currentUser.role === 'admin')) {
+    resultsTab.style.display = 'block';
+  }
+
+  // Tab Tra Cứu: hiển thị cho tất cả users
+  const historyTab = document.querySelector('.tab-btn[data-tab="history"]');
+  if (historyTab) historyTab.style.display = 'block';
+
+  // Nút Export Excel + ô GEN trong tab Tra Cứu: chỉ hiển thị cho leader và admin
+  const exportSurveyBtn = document.getElementById('export-survey-btn');
+  const historyGenWrapper = document.getElementById('history-gen-wrapper');
+  if (currentUser.role === 'leader' || currentUser.role === 'admin') {
+    if (exportSurveyBtn) exportSurveyBtn.style.display = 'inline-flex';
+    if (historyGenWrapper) historyGenWrapper.style.display = 'flex';
+  } else {
+    if (exportSurveyBtn) exportSurveyBtn.style.display = 'none';
+    if (historyGenWrapper) historyGenWrapper.style.display = 'none';
+  }
+
+  // Tab Quản trị: chỉ hiển thị cho admin
+  if (adminTab && currentUser.role === 'admin') {
+    adminTab.style.display = 'block';
+  }
+  
+  // Reset về tab Khảo sát
+  showTab('survey');
+  
+  // Check if admin is already unlocked
+  adminUnlocked = localStorage.getItem('admin_unlocked') === 'true';
+  
+  // Reset thông báo survey khi người dùng mới đăng nhập
+  const surveyMessage = document.getElementById('survey-message');
+  if (surveyMessage) {
+    surveyMessage.style.display = 'none';
+    surveyMessage.textContent = '';
+  }
+  
+  // Khởi tạo date pickers
+  setTimeout(() => {
+    initializeDatePickers();
+  }, 200);
+}
+
+function showTab(tabName) {
+  // Kiểm tra quyền truy cập tab
+  if (!hasPermissionForTab(tabName)) {
+    showMessage('survey-message', 'Bạn không có quyền truy cập tab này', 'error', 3000);
+    return;
+  }
+  
+  // Hide all tabs
+  document.querySelectorAll('.tab-content').forEach(tab => {
+    tab.classList.remove('active');
+  });
+  
+  // Remove active class from all buttons
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.classList.remove('active');
+  });
+  
+  // Show selected tab
+  const tabEl = document.getElementById(tabName);
+  if (tabEl) tabEl.classList.add('active');
+  
+  // Activate selected button bằng data-tab
+  const tabBtn = document.querySelector(`.tab-btn[data-tab="${tabName}"]`);
+  if (tabBtn) tabBtn.classList.add('active');
+  
+  // Khởi tạo date picker khi chuyển tab (nếu cần)
+  if (tabName === 'results' || tabName === 'admin') {
+    setTimeout(() => {
+      initializeDatePickers();
+    }, 50);
+  }
+  if (tabName === 'admin') {
+    setTimeout(() => {
+      initializeAdminDatePicker();
+    }, 50);
+  }
+  if (tabName === 'history') {
+    setTimeout(() => {
+      initializeHistoryDatePickers();
+    }, 50);
+  }
+}
+
+function hasPermissionForTab(tabName) {
+  if (!currentUser || !currentUser.role) return false;
+  
+  const userRole = currentUser.role;
+  
+  switch(tabName) {
+    case 'survey':
+      return true; // Tất cả users đều được truy cập
+
+    case 'results':
+      return userRole === 'leader' || userRole === 'admin';
+
+    case 'history':
+      return true; // Tất cả users đều được truy cập
+
+    case 'admin':
+      return userRole === 'admin';
+
+    default:
+      return false;
+  }
+}
+
+    function getRoleDisplayName(role) {
+      const roleNames = {
+        'admin': 'Quản trị viên',
+        'leader': 'Trưởng nhóm', 
+        'user': 'Nhân viên'
+      };
+      return roleNames[role] || role;
+    }
+
+    // ===== LOGOUT =====
+
+function logout() {
+  // 1. Reset UI state trước
+  const loginBtn = document.getElementById('login-btn');
+  const loginText = document.getElementById('login-text');
+  const loginLoading = document.getElementById('login-loading');
+  
+  if (loginBtn && loginText && loginLoading) {
+    loginText.textContent = 'Đăng Nhập';
+    loginLoading.style.display = 'none';
+    loginBtn.disabled = false;
+  }
+  
+  // 2. Clear storage
+  localStorage.removeItem('user_data');
+  localStorage.removeItem('admin_unlocked');
+  
+  // 3. Reset state
+  currentUser = null;
+  adminUnlocked = false;
+  
+  // 4. Reset UI về trạng thái ban đầu (quan trọng!)
+  resetUIAfterLogout();
+  
+  // 5. Show login form
+  showLoginForm();
+  
+  // 6. Clear forms và messages
+  clearFormsAndMessages();
+}
+
+function resetUIAfterLogout() {
+  // Ẩn tất cả tab đặc quyền
+  const adminTab = document.getElementById('admin-tab');
+  const resultsTab = document.querySelector('.tab-btn[data-tab="results"]');
+  
+  if (adminTab) adminTab.style.display = 'none';
+  if (resultsTab) resultsTab.style.display = 'none';
+  
+  // Reset về tab Khảo sát
+  document.querySelectorAll('.tab-content').forEach(tab => {
+    tab.classList.remove('active');
+  });
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.classList.remove('active');
+  });
+  
+  const surveyTab = document.getElementById('survey');
+  const surveyTabBtn = document.querySelector('.tab-btn[onclick="showTab(\'survey\')"]');
+  
+  if (surveyTab) surveyTab.classList.add('active');
+  if (surveyTabBtn) surveyTabBtn.classList.add('active');
+}
+
+function clearFormsAndMessages() {
+  // Reset forms
+  const loginForm = document.getElementById('login-form');
+  const surveyForm = document.getElementById('survey-form');
+  
+  if (loginForm) loginForm.reset();
+  if (surveyForm) surveyForm.reset();
+  
+  // Clear messages
+  const surveyMessage = document.getElementById('survey-message');
+  const loginMessage = document.getElementById('login-message');
+  
+  if (surveyMessage) {
+    surveyMessage.style.display = 'none';
+    surveyMessage.textContent = '';
+  }
+  
+  if (loginMessage) {
+    loginMessage.style.display = 'none';
+    loginMessage.textContent = '';
+  }
+}
+
+    // ===== UTILITY FUNCTIONS =====
+function showMessage(elementId, message, type, duration = 0) {
+  const element = document.getElementById(elementId);
+  if (!element) {
+    // fallback: console + alert để người dùng thấy thông báo nếu phần tử không tồn tại
+    console.warn('showMessage fallback:', elementId, message);
+    alert(message);
+    return;
+  }
+  
+  element.innerHTML = message;
+  element.className = `status-message status-${type}`;
+  element.style.display = 'block';
+  
+  // CHỈ TỰ ẨN NẾU duration > 0
+  if (duration > 0) {
+    // Xóa bất kỳ timeout nào trước đó
+    if (element.timeoutId) {
+      clearTimeout(element.timeoutId);
+    }
+    
+    // Tự động ẩn sau thời gian chỉ định
+    element.timeoutId = setTimeout(() => {
+      element.style.display = 'none';
+      element.timeoutId = null;
+    }, duration);
+  } else {
+    // duration = 0: KHÔNG TỰ ẨN, xóa timeout nếu có
+    if (element.timeoutId) {
+      clearTimeout(element.timeoutId);
+      element.timeoutId = null;
+    }
+  }
+}
+
+// Hàm tạo message sau submit (giữ định dạng: mỗi dòng 1 div .msg-line)
+function createDetailedSuccessMessage(userName, genCode, answers) {
+  const lines = [];
+
+  // Title (hiển thị nhưng không copy)
+  lines.push('✅ Bạn đã hoàn thành khảo sát');
+
+  // Name - GEN
+  const nameGen = `${(userName || '').trim()}${userName ? ' - ' : ''}${(genCode || '').trim()}`.trim();
+  if (nameGen) lines.push(nameGen);
+
+  // Date (q2)
+  const surveyDate = answers && answers.q2 && answers.q2.answer ? answers.q2.answer : '';
+  if (surveyDate) lines.push(`Ngày: ${surveyDate}`);
+
+  // Shift (q3)
+  const shift = answers && answers.q3 && answers.q3.answer ? answers.q3.answer : '';
+  if (shift) lines.push(shift);
+
+  // Dynamic answers: q4, q5, ... (bỏ qua trống)
+  const dynamicKeys = Object.keys(answers || {})
+    .filter(k => /^q\d+$/.test(k))
+    .map(k => ({ k, num: parseInt(k.replace('q', ''), 10) }))
+    .filter(o => o.num >= 4)
+    .sort((a, b) => a.num - b.num)
+    .map(o => o.k);
+
+  dynamicKeys.forEach(qId => {
+    const obj = answers[qId];
+    if (!obj) return;
+    const ans = obj.answer != null ? String(obj.answer).trim() : '';
+    const reason = obj.reason != null ? String(obj.reason).trim() : '';
+    if (!ans) return;
+    let line = ans;
+    if (reason) line += ' - ' + reason;
+    lines.push(line);
+  });
+
+  // Build HTML lines
+  const htmlLines = lines.map((ln, idx) => {
+    const cls = `msg-line msg-line-${idx}`;
+    return `<div class="${cls}" style="margin-bottom:6px;">${escapeHtml(ln)}</div>`;
+  }).join('');
+
+  const html = `
+    <div style="text-align:left;">
+      ${htmlLines}
+      <div style="margin-top:10px; display:flex; gap:8px; align-items:center; justify-content:center;">
+        <button class="btn btn-primary" id="copy-survey-btn" onclick="copySurveyMessage()" style="padding:8px 12px; font-size:14px;">
+          📋 Sao chép
+        </button>
+      </div>
+    </div>
+  `;
+
+  return html;
+}
+
+// Escape HTML helper (nếu đã có, giữ nguyên)
+function escapeHtml(text) {
+  if (text == null) return '';
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+// Copy function: bỏ dòng tiêu đề (dòng đầu .msg-line) khi copy
+function copySurveyMessage() {
+  const container = document.getElementById('survey-message');
+  if (!container) {
+    alert('Không tìm thấy vùng thông báo để copy.');
+    return;
+  }
+
+  // Collect displayed .msg-line elements in order
+  const lineEls = Array.from(container.querySelectorAll('.msg-line'));
+  if (lineEls.length === 0) {
+    alert('Không có nội dung để sao chép.');
+    return;
+  }
+
+  // Skip first line (title) and collect the rest
+  const lines = [];
+  for (let i = 1; i < lineEls.length; i++) {
+    const txt = (lineEls[i].innerText || lineEls[i].textContent || '').trim();
+    if (txt) lines.push(txt);
+  }
+
+  const plain = lines.join('\n');
+
+  if (!plain) {
+    alert('Không có nội dung để sao chép.');
+    return;
+  }
+
+  // Try navigator.clipboard first
+  if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(plain).then(function() {
+      // Show inline confirmation if not already present
+      if (!container.querySelector('.copy-note')) {
+        const note = '<div class="copy-note" style="margin-top:8px;color:#155724;font-weight:600;text-align:center;">✅ Đã sao chép vào clipboard</div>';
+        container.insertAdjacentHTML('beforeend', note);
+      }
+    }).catch(function(err) {
+      fallbackCopyTextToClipboard(plain);
+    });
+  } else {
+    fallbackCopyTextToClipboard(plain);
+  }
+}
+
+// Fallback copy for older browsers
+function fallbackCopyTextToClipboard(text) {
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.top = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+
+    const successful = document.execCommand('copy');
+    document.body.removeChild(textarea);
+
+    const container = document.getElementById('survey-message');
+    if (successful) {
+      if (container && !container.querySelector('.copy-note')) {
+        container.insertAdjacentHTML('beforeend', '<div class="copy-note" style="margin-top:8px;color:#155724;font-weight:600;text-align:center;">✅ Đã sao chép vào clipboard</div>');
+      } else {
+        alert('✅ Đã sao chép vào clipboard');
+      }
+    } else {
+      alert('Không thể sao chép tự động. Vui lòng bôi đen và sao chép thủ công.');
+    }
+  } catch (e) {
+    alert('Trình duyệt không hỗ trợ sao chép tự động. Vui lòng bôi đen và sao chép thủ công.');
+  }
+}
+
+// ===== SURVEY DATA LOADING =====
+function loadSurveyData() {
+  console.log('Loading survey data...');
+  
+  const questionsContainer = document.getElementById('questions-container');
+  questionsContainer.innerHTML = '<div class="loading"></div> Đang tải câu hỏi...';
+  
+  google.script.run
+    .withSuccessHandler(function(response) {
+      if (response.success) {
+        displaySurveyQuestions(response.questions);
+      } else {
+        showMessage('survey-message', 'Lỗi tải câu hỏi: ' + response.error, 'error');
+        questionsContainer.innerHTML = '<p class="status-error">Không thể tải câu hỏi</p>';
+      }
+    })
+    .withFailureHandler(function(error) {
+      console.error('Error loading survey:', error);
+      showMessage('survey-message', 'Lỗi kết nối: ' + error.message, 'error');
+      questionsContainer.innerHTML = '<p class="status-error">Lỗi kết nối server</p>';
+    })
+    .getSurveyDataForUI();
+}
+
+function displaySurveyQuestions(questions) {
+  const container = document.getElementById('questions-container');
+
+  // Lấy thông tin user hiện tại để set default cho leader
+  const currentUser = JSON.parse(localStorage.getItem('user_data'));
+  const defaultLeader = currentUser ? currentUser.leaderName : '';
+
+  let html = '';
+
+  // === CÂU 1: Line Leader ===
+  html += `
+    <div class="question-card">
+      <h3 class="required-field">Câu 1: Leader của bạn là?</h3>
+      <div class="form-group">
+        <select id="leader-dropdown" class="form-control" required>
+          <option value="${escapeHtml(defaultLeader)}">${escapeHtml(defaultLeader)}</option>
+        </select>
+      </div>
+    </div>
+  `;
+
+  // === CÂU 2: Ngày khảo sát ===
+  const today = new Date();
+  const tomorrow = new Date(today);
+  tomorrow.setDate(today.getDate() + 1);
+
+  const formattedToday = formatDate(today);
+  const formattedTomorrow = formatDate(tomorrow);
+
+  const weekdayToday = getWeekdayName(today);
+  const weekdayTomorrow = getWeekdayName(tomorrow);
+
+  html += `
+    <div class="question-card">
+      <h3 class="required-field">Câu 2: Ngày khảo sát đi làm:</h3>
+      <div class="options-container">
+        <div class="option-row">
+          <input 
+            type="radio" 
+            id="survey-date-today" 
+            name="q2" 
+            value="${formattedToday}" 
+            class="option-input" 
+            onchange="validateCustomDate()"
+            required
+          >
+          <label for="survey-date-today" class="option-label">${formattedToday} (${weekdayToday})</label>
+        </div>
+        <div class="option-row">
+          <input 
+            type="radio" 
+            id="survey-date-tomorrow" 
+            name="q2" 
+            value="${formattedTomorrow}" 
+            class="option-input" 
+            onchange="validateCustomDate()"
+            required
+          >
+          <label for="survey-date-tomorrow" class="option-label">${formattedTomorrow} (${weekdayTomorrow})</label>
+        </div>
+        <div class="option-row" style="padding-top: 0px;padding-bottom: 0px;">
+          <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 8px;">
+            <div style="display: flex; align-items: center;gap: var(--space-md);">
+              <input 
+                type="radio" 
+                id="survey-date-custom" 
+                name="q2" 
+                value="custom" 
+                class="option-input" 
+                onchange="validateCustomDate()"
+                required
+              >
+              <label for="survey-date-custom" class="option-label">Ngày khác:</label>
+            </div>
+            <!-- Date picker trên cùng dòng -->
+            <div id="custom-date-container" style="display: inline-block;">
+              <input 
+                type="date" 
+                id="custom-date-input" 
+                class="form-control" 
+                style="width: 150px;"
+                onchange="validateCustomDate()"
+              >
+            </div>
+          </div>
+        </div>
+        <div id="custom-date-error" style="color: #ea4335; font-size: 13px; margin-top: 4px; margin-left: 24px; display: none;"></div>
+      </div>
+    </div>
+  `;
+
+  // === CÂU 3: Ca làm việc ===
+  html += `
+    <div class="question-card">
+      <h3 class="required-field">Câu 3: Vào ngày đó bạn làm việc:</h3>
+      <div class="options-container">
+        <div class="option-row">
+          <input type="radio" id="q3_1" name="q3" value="Ca ngày" class="option-input" onchange="handleWorkShiftChange(this.value)" required>
+          <label for="q3_1" class="option-label">Ca ngày</label>
+        </div>
+        <div class="option-row">
+          <input type="radio" id="q3_2" name="q3" value="Ca đêm" class="option-input" onchange="handleWorkShiftChange(this.value)" required>
+          <label for="q3_2" class="option-label">Ca đêm</label>
+        </div>
+        <div class="option-row">
+          <input type="radio" id="q3_3" name="q3" value="Nghỉ nhóm ca" class="option-input" onchange="handleWorkShiftChange(this.value)" required>
+          <label for="q3_3" class="option-label">Nghỉ nhóm ca</label>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // === DYNAMIC QUESTIONS ===
+  if (questions && questions.length > 0) {
+    // Q4 (first dynamic)
+    const q4 = questions[0];
+    html += `
+      <div class="question-card" id="question-4-container" style="display: none;">
+        <h3 class="required-field">Câu 4: ${escapeHtml(q4.text)}</h3>
+        <div class="options-container">
+    `;
+
+    q4.options.forEach((opt, optionIndex) => {
+      const optValue = opt && typeof opt === 'object' ? opt.value : String(opt);
+      const optPlaceholder = opt && typeof opt === 'object' ? (opt.placeholder || '') : '';
+      const optionId = `q4_opt${optionIndex}`;
+      const reasonDivId = `reason-q4-${optionIndex}`;
+      const reasonInputId = `reason-input-q4-${optionIndex}`;
+
+      // Mỗi option có 1 div lý do đặt ngay phía dưới option đó
+      html += `
+        <div class="option-row" id="row-${optionId}">
+          <input
+            type="radio"
+            id="${optionId}"
+            name="q4"
+            value="${escapeHtml(optValue)}"
+            class="option-input"
+            data-placeholder="${escapeHtml(optPlaceholder)}"
+            onchange="toggleReasonInput(this)"
+          >
+          <label for="${optionId}" class="option-label">${escapeHtml(optValue)}</label>
+        </div>
+      `;
+
+      if (optPlaceholder && optPlaceholder.trim() !== '') {
+        html += `
+          <div id="${reasonDivId}" style="display: none;">
+            <input type="text" id="${reasonInputId}" class="form-control reason-input" placeholder="${escapeHtml(optPlaceholder)}">
+          </div>
+        `;
+      } else {
+        // Render an empty hidden placeholder container (for uniform DOM queries)
+        html += `
+          <div id="${reasonDivId}" style="display: none;"></div>
+        `;
+      }
+    });
+
+    html += `
+        </div>
+      </div>
+    `;
+  }
+
+  // Remaining dynamic questions (Q5..)
+  for (let i = 1; i < (questions ? questions.length : 0); i++) {
+    const question = questions[i];
+    const questionNumber = i + 4;
+    html += `
+      <div class="question-card">
+        <h3 class="required-field">Câu ${questionNumber}: ${escapeHtml(question.text)}</h3>
+        <div class="options-container">
+    `;
+
+    question.options.forEach((opt, optionIndex) => {
+      const optValue = opt && typeof opt === 'object' ? opt.value : String(opt);
+      const optPlaceholder = opt && typeof opt === 'object' ? (opt.placeholder || '') : '';
+      const optionId = `q${questionNumber}_opt${optionIndex}`;
+      const reasonDivId = `reason-q${questionNumber}-${optionIndex}`;
+      const reasonInputId = `reason-input-q${questionNumber}-${optionIndex}`;
+
+      html += `
+        <div class="option-row" id="row-${optionId}">
+          <input
+            type="radio"
+            id="${optionId}"
+            name="q${questionNumber}"
+            value="${escapeHtml(optValue)}"
+            class="option-input"
+            data-placeholder="${escapeHtml(optPlaceholder)}"
+            onchange="toggleReasonInput(this)"
+            required
+          >
+          <label for="${optionId}" class="option-label">${escapeHtml(optValue)}</label>
+        </div>
+      `;
+
+      if (optPlaceholder && optPlaceholder.trim() !== '') {
+        html += `
+          <div id="${reasonDivId}" style="display: none;">
+            <input type="text" id="${reasonInputId}" class="form-control reason-input" placeholder="${escapeHtml(optPlaceholder)}">
+          </div>
+        `;
+      } else {
+        html += `
+          <div id="${reasonDivId}" style="display: none;"></div>
+        `;
+      }
+    });
+
+    html += `
+        </div>
+      </div>
+    `;
+  }
+
+  container.innerHTML = html;
+
+  // Khởi tạo leader dropdown
+  loadLeadersAndDefault();
+
+  // Set default state for Question 4 (ẩn)
+  const question4Container = document.getElementById('question-4-container');
+  if (question4Container) {
+    question4Container.style.display = 'none';
+    removeQuestion4Required();
+  }
+
+  // Khởi tạo custom date input
+  setTimeout(() => {
+    initializeCustomDateInput();
+  }, 100);
+}
+
+// ===== SUPPORTING FUNCTIONS =====
+
+/* Globals cho luồng thay đổi leader */
+let _originalLeaderForThisUser = '';
+let _pendingLeaderSelection = '';
+
+/**
+ * Bắt đầu load leaders + employee leader mặc định.
+ * Gọi khi load survey: loadLeadersAndDefault();
+ */
+function loadLeadersAndDefault() {
+  google.script.run
+    .withSuccessHandler(function(respLeaders) {
+      if (!respLeaders || !respLeaders.success) {
+        console.error('Error loading leaders:', respLeaders && respLeaders.error);
+        showMessage('survey-message', 'Lỗi tải danh sách leader: ' + (respLeaders && respLeaders.error || ''), 'error');
+        return;
+      }
+      const leaders = respLeaders.data || [];
+
+      // Chỉ gọi getEmployeeByGen khi currentUser tồn tại và có gen
+      if (currentUser && currentUser.gen) {
+        google.script.run
+          .withSuccessHandler(function(respEmp) {
+            let employeeLeader = '';
+            if (respEmp && respEmp.success) {
+              employeeLeader = respEmp.data.leaderName || '';
+            }
+            buildLeaderDropdown(leaders, employeeLeader);
+          })
+          .withFailureHandler(function(err) {
+            console.error('Error getEmployeeByGen:', err);
+            buildLeaderDropdown(leaders, '');
+            showMessage('survey-message', 'Lỗi tải thông tin nhân viên', 'error');
+          })
+          .getEmployeeByGen(currentUser.gen);
+      } else {
+        // Không có currentUser => build dropdown chỉ với leaders, default rỗng
+        buildLeaderDropdown(leaders, '');
+      }
+    })
+    .withFailureHandler(function(err) {
+      console.error('Error getLeadersList:', err);
+      showMessage('survey-message', 'Lỗi kết nối khi tải danh sách leader', 'error');
+    })
+    .getLeadersList();
+}
+
+/**
+ * Xây dropdown có search, chọn default theo employeeLeader nếu có,
+ * nếu không có employeeLeader thì chọn phần tử đầu tiên (nếu tồn tại).
+ */
+function buildLeaderDropdown(leadersArray, employeeLeader = '') {
+  const dropdown = document.getElementById('leader-dropdown');
+  if (!dropdown) return;
+
+  // 🔴 SỬA: Xử lý cả array và object response
+  const leaders = Array.isArray(leadersArray) ? leadersArray : (leadersArray.data || []);
+  
+  // 🔴 SỬA: Ưu tiên employeeLeader từ backend, nếu không có thì dùng giá trị hiện tại
+  const currentValue = employeeLeader || dropdown.value.trim(); 
+
+  dropdown.innerHTML = '';
+
+  leaders.forEach(name => {
+    const trimmedName = name.trim();
+    const opt = document.createElement('option');
+    opt.value = trimmedName;
+    opt.textContent = trimmedName;
+    dropdown.appendChild(opt);
+  });
+
+  // 🔴 SỬA: Gán giá trị và SET BIẾN GLOBAL
+  dropdown.value = currentValue;
+  _originalLeaderForThisUser = currentValue; // 🔴 QUAN TRỌNG: Khởi tạo giá trị ban đầu
+
+  dropdown.required = true;
+
+  // Gắn sự kiện thay đổi
+  dropdown.addEventListener('change', function () {
+    const newVal = this.value;
+    console.log('Leader changed:', _originalLeaderForThisUser, '→', newVal); // 🔴 DEBUG
+    
+    if (!newVal || newVal === _originalLeaderForThisUser) {
+      _pendingLeaderSelection = '';
+      return;
+    }
+    _pendingLeaderSelection = newVal;
+    showConfirmLeaderModal(_originalLeaderForThisUser, _pendingLeaderSelection, dropdown);
+  });
+}
+
+
+
+
+/* Hiển thị modal xác nhận và xử lý confirm/cancel (revert nếu cancel) */
+function showConfirmLeaderModal(oldLeader, newLeader, dropdownElement) {
+  const modal = document.getElementById('confirm-leader-modal');
+  const msg = document.getElementById('confirm-leader-message');
+  const yesBtn = document.getElementById('confirm-leader-yes');
+  const noBtn = document.getElementById('confirm-leader-no');
+  if (!modal || !msg || !yesBtn || !noBtn) return;
+
+  msg.textContent = `Bạn có muốn cập nhật Leader của bạn từ "${oldLeader || '(trống)'}" thành "${newLeader}" không?`;
+  modal.classList.add('active');
+
+  yesBtn.onclick = null;
+  noBtn.onclick = null;
+
+  yesBtn.onclick = function() {
+    yesBtn.disabled = true;
+    noBtn.disabled = true;
+    google.script.run
+      .withSuccessHandler(function(resp) {
+        yesBtn.disabled = false;
+        noBtn.disabled = false;
+        modal.classList.remove('active');
+
+        if (resp && resp.success) {
+          _originalLeaderForThisUser = newLeader;
+          if (currentUser) {
+            currentUser.leaderName = newLeader;
+            try { localStorage.setItem('user_data', JSON.stringify(currentUser)); } catch(e){console.warn(e);}
+          }
+          showMessage('survey-message', 'Cập nhật leader thành công', 'success');
+        } else {
+          dropdownElement.value = _originalLeaderForThisUser || '';
+          showMessage('survey-message', 'Cập nhật leader thất bại: ' + (resp && resp.error ? resp.error : 'Lỗi server'), 'error');
+        }
+        _pendingLeaderSelection = '';
+      })
+      .withFailureHandler(function(err) {
+        yesBtn.disabled = false;
+        noBtn.disabled = false;
+        modal.classList.remove('active');
+        dropdownElement.value = _originalLeaderForThisUser || '';
+        _pendingLeaderSelection = '';
+        showMessage('survey-message', 'Lỗi kết nối khi cập nhật leader: ' + err.message, 'error');
+      })
+      .updateEmployeeLeader(currentUser.gen, newLeader);
+  };
+
+  noBtn.onclick = function() {
+    dropdownElement.value = _originalLeaderForThisUser || '';
+    _pendingLeaderSelection = '';
+    modal.classList.remove('active');
+  };
+}
+
+// ===== CONDITIONAL LOGIC FOR QUESTION 4 =====
+
+function clearQuestion4Data() {
+  // Bỏ chọn tất cả radio buttons của Câu 4
+  const radioInputs = document.querySelectorAll('input[name="q4"]');
+  radioInputs.forEach(radio => {
+    radio.checked = false;
+  });
+  
+  // Ẩn và clear input lý do nếu có
+  const reasonInput = document.getElementById('reason-input-q4');
+  if (reasonInput) {
+    reasonInput.value = '';
+    reasonInput.style.display = 'none';
+  }
+  
+  const reasonContainer = document.getElementById('reason-q4');
+  if (reasonContainer) {
+    reasonContainer.style.display = 'none';
+  }
+}
+
+// ===== REASON INPUT TOGGLE (for "Khác" option) =====
+function toggleReasonInput(elem) {
+  // elem is the radio input element that triggered onchange
+  try {
+    if (!elem) return;
+    const questionName = elem.name; // e.g. 'q4' or 'q5'
+    const selectedValue = elem.value;
+    const placeholder = elem.dataset && elem.dataset.placeholder ? String(elem.dataset.placeholder) : '';
+
+    // Determine option index from elem.id (expect format like q4_opt0)
+    const idParts = (elem.id || '').split('_');
+    const lastPart = idParts.length ? idParts[idParts.length - 1] : '';
+    const optionIndex = lastPart.startsWith('opt') ? lastPart.replace('opt', '') : '';
+
+    // For this question, hide all reason divs for other options and show only the matched one (if placeholder)
+    const reasonDivPrefix = `reason-${questionName}-`;
+    const reasonInputPrefix = `reason-input-${questionName}-`;
+
+    // Find all elements that match prefix
+    const allReasonDivs = Array.from(document.querySelectorAll(`[id^="${reasonDivPrefix}"]`));
+    allReasonDivs.forEach(div => {
+      // hide all initially
+      div.style.display = 'none';
+      // clear contained input if exists
+      const input = div.querySelector('input');
+      if (input) {
+        input.required = false;
+        // do not clear value here; only clear when hiding due to non-placeholder
+        // but to be safe, clear when hiding
+        input.value = '';
+        input.placeholder = '';
+      }
+    });
+
+    if (optionIndex === '') {
+      // fallback: if no index, try find the reason div by questionName (single)
+      const singleDiv = document.getElementById(`reason-${questionName}`);
+      const singleInput = document.getElementById(`reason-input-${questionName}`);
+      if (placeholder && placeholder.trim() !== '') {
+        if (singleDiv) singleDiv.style.display = 'block';
+        if (singleInput) {
+          singleInput.style.display = 'block';
+          singleInput.required = true;
+          singleInput.placeholder = placeholder;
+        }
+      } else {
+        if (singleDiv) singleDiv.style.display = 'none';
+        if (singleInput) {
+          singleInput.style.display = 'none';
+          singleInput.required = false;
+          singleInput.value = '';
+          singleInput.placeholder = '';
+        }
+      }
+      return;
+    }
+
+    // Show the specific reason div for selected option if placeholder present
+    const targetReasonDiv = document.getElementById(`${reasonDivPrefix}${optionIndex}`);
+    const targetReasonInput = document.getElementById(`${reasonInputPrefix}${optionIndex}`);
+
+    if (placeholder && placeholder.trim() !== '') {
+      if (targetReasonDiv) targetReasonDiv.style.display = 'block';
+      if (targetReasonInput) {
+        targetReasonInput.style.display = 'block';
+        targetReasonInput.required = true;
+        targetReasonInput.placeholder = placeholder;
+      }
+    } else {
+      if (targetReasonDiv) targetReasonDiv.style.display = 'none';
+      if (targetReasonInput) {
+        targetReasonInput.style.display = 'none';
+        targetReasonInput.required = false;
+        targetReasonInput.value = '';
+        targetReasonInput.placeholder = '';
+      }
+    }
+  } catch (e) {
+    console.error('toggleReasonInput error:', e);
+  }
+}
+// ===== CUSTOM DATE INPUT FUNCTIONS =====
+
+/**
+ * Hiển thị/ẩn date picker khi chọn option "Ngày khác"
+ */
+function toggleCustomDateInput() {
+  const customOption = document.getElementById('survey-date-custom');
+  const dateContainer = document.getElementById('custom-date-container');
+  const dateInput = document.getElementById('custom-date-input');
+  const errorDiv = document.getElementById('custom-date-error');
+
+  if (!customOption || !dateContainer || !dateInput) return;
+
+  if (customOption.checked) {
+    // Hiển thị date picker
+    dateContainer.style.display = 'block';
+    
+    // Focus và chọn ngày mặc định nếu chưa có
+    setTimeout(() => {
+      if (!dateInput.value) {
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        dateInput.value = formatDateForPicker(tomorrow);
+      }
+      dateInput.focus();
+    }, 50);
+    
+    // Ẩn thông báo lỗi nếu có
+    if (errorDiv) {
+      errorDiv.style.display = 'none';
+      errorDiv.textContent = '';
+    }
+  } else {
+    // Ẩn date picker và clear value
+    dateContainer.style.display = 'none';
+    dateInput.value = '';
+    
+    // Ẩn thông báo lỗi
+    if (errorDiv) {
+      errorDiv.style.display = 'none';
+      errorDiv.textContent = '';
+    }
+  }
+}
+
+/**
+ * Khởi tạo custom date input với ngày mặc định là ngày mai
+ */
+function initializeCustomDateInput() {
+  const dateInput = document.getElementById('custom-date-input');
+  if (!dateInput) return;
+
+  // Set min date là hôm nay (không cho chọn ngày quá khứ)
+  const today = new Date();
+  dateInput.min = formatDateForPicker(today);
+
+  // Set default value là ngày mai
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 2);
+  dateInput.value = formatDateForPicker(tomorrow);
+}
+/**
+ * Validate ngày được chọn không được là quá khứ
+ * Gọi khi thay đổi radio button hoặc thay đổi date picker
+ */
+function validateCustomDate() {
+  const dateInput = document.getElementById('custom-date-input');
+  const errorDiv = document.getElementById('custom-date-error');
+  const customOption = document.getElementById('survey-date-custom');
+
+  if (!dateInput || !errorDiv) return;
+
+  // Chỉ validate và hiển thị lỗi nếu option "Ngày khác" được chọn
+  const isCustomSelected = customOption && customOption.checked;
+  
+  if (!dateInput.value) {
+    if (isCustomSelected) {
+      errorDiv.textContent = 'Vui lòng chọn ngày';
+      errorDiv.style.display = 'block';
+    } else {
+      errorDiv.style.display = 'none';
+    }
+    return false;
+  }
+
+  const selectedDate = new Date(dateInput.value);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0); // Reset về 00:00:00
+
+  if (selectedDate < today) {
+    if (isCustomSelected) {
+      errorDiv.textContent = 'Không được chọn ngày trong quá khứ';
+      errorDiv.style.display = 'block';
+    }
+    return false;
+  } else {
+    errorDiv.style.display = 'none';
+    errorDiv.textContent = '';
+    return true;
+  }
+}
+// ===== UTILITY FUNCTIONS =====
+
+// Hàm format ngày thành "dd/mm/yyyy"
+function formatDate(date) {
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = date.getFullYear();
+  return `${day}/${month}/${year}`;
+}
+
+function getWeekdayName(date) {
+  const weekdays = ['Chủ nhật', 'Thứ hai', 'Thứ ba', 'Thứ tư', 'Thứ năm', 'Thứ sáu', 'Thứ bảy'];
+  return weekdays[date.getDay()];
+}
+
+// Hàm xử lý thay đổi ca làm việc (Câu 3)
+// ===== ENHANCED CONDITIONAL LOGIC =====
+function handleWorkShiftChange(selectedValue) {
+  const question4Container = document.getElementById('question-4-container');
+  const q4Inputs = document.querySelectorAll('input[name="q4"]');
+  
+  if (selectedValue === 'Nghỉ nhóm ca') {
+    // Ẩn Câu 4 và clear dữ liệu
+    question4Container.style.display = 'none';
+    clearQuestion4Data();
+    removeQuestion4Required();
+  } else {
+    // Hiện Câu 4 và set required
+    question4Container.style.display = 'block';
+    setQuestion4Required();
+  }
+  
+  // Update validation state
+  validateQuestion4Visibility();
+}
+
+function setQuestion4Required() {
+  const q4Inputs = document.querySelectorAll('input[name="q4"]');
+  q4Inputs.forEach(input => {
+    input.required = true;
+  });
+}
+
+function removeQuestion4Required() {
+  const q4Inputs = document.querySelectorAll('input[name="q4"]');
+  q4Inputs.forEach(input => {
+    input.required = false;
+  });
+}
+
+function validateQuestion4Visibility() {
+  const question4Container = document.getElementById('question-4-container');
+  const isVisible = question4Container.style.display !== 'none';
+  
+  if (isVisible) {
+    // Check if any Q4 option is selected
+    const q4Selected = document.querySelector('input[name="q4"]:checked');
+    if (!q4Selected) {
+      return { isValid: false, message: 'Vui lòng trả lời Câu 4' };
+    }
+    
+    // Check "Khác" reason if applicable
+    if (q4Selected.value === 'Khác') {
+      const reasonInput = document.getElementById('reason-input-q4');
+      if (!reasonInput.value.trim()) {
+        return { isValid: false, message: 'Vui lòng nhập lý do cho lựa chọn "Khác"' };
+      }
+    }
+  }
+  
+  return { isValid: true };
+}
+// ===== COMPREHENSIVE FORM VALIDATION =====
+function validateSurveyForm() {
+  const questionCards = document.querySelectorAll('.question-card');
+  const errors = [];
+
+  questionCards.forEach(card => {
+    if (card.style.display !== 'none') {
+      let questionId = 'không xác định';
+      let hasAnswer = false;
+
+      // 1. Kiểm tra radio - ĐẶC BIỆT XỬ LÝ CÂU 2
+      const radioInputs = card.querySelectorAll('input[type="radio"][required]');
+      if (radioInputs.length > 0) {
+        questionId = radioInputs[0].name || questionId;
+        
+        // Đặc biệt xử lý Câu 2 (q2) có option "Ngày khác"
+        if (questionId === 'q2') {
+          const q2Today = document.getElementById('survey-date-today');
+          const q2Tomorrow = document.getElementById('survey-date-tomorrow');
+          const q2Custom = document.getElementById('survey-date-custom');
+          const customDateInput = document.getElementById('custom-date-input');
+          
+          hasAnswer = (q2Today && q2Today.checked) || 
+                      (q2Tomorrow && q2Tomorrow.checked) || 
+                      (q2Custom && q2Custom.checked);
+          
+          // Nếu chọn "Ngày khác", kiểm tra có nhập date không
+          if (q2Custom && q2Custom.checked) {
+            if (!customDateInput || !customDateInput.value) {
+              errors.push('Vui lòng chọn ngày cho option "Ngày khác"');
+            } else if (!validateCustomDate()) {
+              errors.push('Ngày không hợp lệ: không được chọn ngày trong quá khứ');
+            }
+          }
+        } else {
+          // Các câu radio khác
+          hasAnswer = Array.from(radioInputs).some(input => input.checked);
+        }
+
+        if (!hasAnswer) {
+          errors.push(`Bạn chưa trả lời câu hỏi ${questionId}`);
+        }
+
+        // Nếu chọn "Khác", kiểm tra lý do (cho các câu khác q2)
+        if (questionId !== 'q2') {
+          const selected = Array.from(radioInputs).find(input => input.checked);
+          if (selected && selected.value === 'Khác') {
+            const reasonInput = card.querySelector('.reason-input');
+            if (!reasonInput || reasonInput.value.trim() === '') {
+              errors.push(`Vui lòng nhập lý do cho câu hỏi ${questionId}`);
+            }
+          }
+        }
+        return; // đã xử lý radio, không cần kiểm tra tiếp
+      }
+
+      // 2. Kiểm tra select
+      const selectInput = card.querySelector('select[required]');
+      if (selectInput) {
+        questionId = selectInput.id || questionId;
+        if (!selectInput.value || selectInput.value.trim() === '') {
+          errors.push(`Bạn chưa chọn đáp án cho câu hỏi ${questionId}`);
+        }
+        return;
+      }
+
+      // 3. Kiểm tra input text
+      const textInput = card.querySelector('input[type="text"][required]');
+      if (textInput) {
+        questionId = textInput.id || questionId;
+        if (!textInput.value || textInput.value.trim() === '') {
+          errors.push(`Bạn chưa nhập thông tin cho câu hỏi ${questionId}`);
+        }
+        return;
+      }
+    }
+  });
+
+  return {
+    isValid: errors.length === 0,
+    errors: errors
+  };
+}
+
+function clearDependentQuestions() {
+  // Clear answers của các câu 2,3
+  ['q2', 'q3'].forEach(qId => {
+    const radioInputs = document.querySelectorAll(`input[name="${qId}"]`);
+    radioInputs.forEach(radio => {
+      radio.checked = false;
+    });
+    
+    // Clear reason input nếu có
+    const reasonInput = document.getElementById(`reason-input-${qId}`);
+    if (reasonInput) {
+      reasonInput.value = '';
+      reasonInput.style.display = 'none';
+    }
+    
+    // Ẩn reason container nếu có
+    const reasonContainer = document.getElementById(`reason-${qId}`);
+    if (reasonContainer) {
+      reasonContainer.style.display = 'none';
+    }
+  });
+}
+
+function loadStatistics() {
+  const dateInput = document.getElementById('stats-date');
+  const shiftSelect = document.getElementById('stats-shift');
+  
+  const selectedDate = dateInput ? formatDateFromPicker(dateInput.value) : '';
+  const selectedShift = shiftSelect ? shiftSelect.value : 'all';
+  
+  const statsContainer = document.getElementById('stats-table-container');
+  const statsLoading = document.getElementById('stats-loading');
+  
+  statsLoading.style.display = 'block';
+  statsContainer.style.display = 'none';
+  
+  google.script.run
+    .withSuccessHandler(function(response) {
+      statsLoading.style.display = 'none';
+      if (response.success) {
+        displayStatisticsTable(response.statistics);
+        statsContainer.style.display = 'block';
+      } else {
+        statsContainer.innerHTML = '<p class="status-error">Lỗi tải thống kê: ' + response.error + '</p>';
+        statsContainer.style.display = 'block';
+      }
+    })
+    .withFailureHandler(function(error) {
+      statsLoading.style.display = 'none';
+      statsContainer.innerHTML = '<p class="status-error">Lỗi kết nối: ' + error.message + '</p>';
+      statsContainer.style.display = 'block';
+    })
+    .getStatisticsForUI(selectedDate, selectedShift); // Gửi cả shift parameter
+}
+
+function displayStatisticsTable(statistics) {
+  const container = document.getElementById('stats-table-container');
+
+  if (!statistics || !statistics.leaders || statistics.leaders.length === 0) {
+    container.innerHTML = '<p class="status-info">Chưa có dữ liệu thống kê.</p>';
+    return;
+  }
+
+  function formatNumber(num) {
+    if (num === 0) return '-';
+    return num.toLocaleString('en-US');
+  }
+
+  // Hàm bổ trợ để lấy nhãn hiển thị từ option (tránh [object Object])
+  function getOptionLabel(option) {
+    if (typeof option === 'object' && option !== null) {
+      return option.value || '';
+    }
+    return option;
+  }
+
+  const shiftDisplay = getShiftDisplayName(statistics.filterShift || 'all');
+  
+  let html = `
+    <table class="stats-table">
+      <thead>
+        <tr>
+          <th rowspan="2" class="sticky-leader">Leader</th>
+          <th rowspan="2">Total</th>
+          <th rowspan="2">Chưa làm</th>
+          <th rowspan="2">Số NV nghỉ</th>
+          <th rowspan="2">Bất thường</th>
+  `;
+
+  statistics.questions.forEach((question, qIndex) => {
+    const colspan = question.options.length;
+    html += `<th colspan="${colspan}">${escapeHtml(question.text || '')}</th>`;
+  });
+
+  html += `</tr><tr>
+  `;
+
+  statistics.questions.forEach((question, qIndex) => {
+    question.options.forEach(option => {
+      // Sửa lỗi hiển thị object tại đây
+      const label = getOptionLabel(option);
+      html += `<th>${escapeHtml(label)}</th>`;
+    });
+  });
+
+  html += `</tr></thead><tbody>`;
+
+  // --- 1) Render TOTAL row (chỉ Normal, ẩn Support) ---
+  html += `
+    <tr class="total-row">
+      <td class="sticky-leader">TOTAL</td>
+      <td><span class="clickable-number" onclick="showEmployeeDetailedModal('TOTAL', '','total', '${statistics.filterDate || ''}', 'Tất cả nhân viên')">${formatNumber(statistics.totals.normal.total)}</span></td>
+      <td><span class="clickable-number" onclick="showEmployeeDetailedModal('TOTAL', '','pending', '${statistics.filterDate || ''}', 'Nhân viên chưa làm khảo sát')">${formatNumber(statistics.totals.normal.pending)}</span></td>
+      <td><span class="clickable-number" onclick="showEmployeeDetailedModal('TOTAL', '','onLeave', '${statistics.filterDate || ''}', 'Nhân viên nghỉ')">${formatNumber(statistics.totals.normal.onLeaveCount)}</span></td>
+      <td><span class="clickable-number" onclick="showEmployeeDetailedModal('TOTAL', '','abnormal', '${statistics.filterDate || ''}', 'Bất thường')">${formatNumber(statistics.totals.normal.abnormalCount || 0)}</span></td>
+  `;
+
+  statistics.questions.forEach((question, qIndex) => {
+    question.options.forEach(option => {
+      const label = getOptionLabel(option);
+      const key = `q${qIndex + 4}_${String(label).replace(/'/g, "\\'")}`;
+      html += `<td><span class="clickable-number" onclick="showEmployeeDetailedModal('TOTAL', '', '${key}', '${statistics.filterDate || ''}', '${String(label).replace(/'/g, "\\'")}')">${formatNumber(statistics.totals.normal[key] || 0)}</span></td>`;
+    });
+  });
+
+  html += `</tr>`;
+  // --- 2) Render leader groups (chỉ Normal, ẩn Support) ---
+  const leaderGroups = groupLeadersByLeaderName(statistics.leaders);
+
+  Object.keys(leaderGroups).forEach(leaderName => {
+    // Lọc chỉ lấy Normal (employeeType !== 'Y'), bỏ Support
+    const leaderStats = leaderGroups[leaderName].filter(leader => leader.employeeType !== 'Y');
+
+    leaderStats.forEach((leader, index) => {
+      html += `<tr>`;
+      if (index === 0) {
+        html += `<td class="sticky-leader">${escapeHtml(leaderName)}</td>`;
+      }
+
+      html += `
+        <td><span class="clickable-number" onclick="showEmployeeDetailedModal('${escapeHtml(leaderName)}', '${leader.employeeType}', 'total', '${statistics.filterDate || ''}', 'Tất cả nhân viên')">${formatNumber(leader.total)}</span></td>
+        <td><span class="clickable-number" onclick="showEmployeeDetailedModal('${escapeHtml(leaderName)}', '${leader.employeeType}', 'pending', '${statistics.filterDate || ''}', 'Nhân viên chưa làm khảo sát')">${formatNumber(leader.pending)}</span></td>
+        <td><span class="clickable-number" onclick="showEmployeeDetailedModal('${escapeHtml(leaderName)}', '${leader.employeeType}', 'onLeave', '${statistics.filterDate || ''}', 'Nhân viên nghỉ')">${formatNumber(leader.onLeaveCount)}</span></td>
+        <td><span class="clickable-number" onclick="showEmployeeDetailedModal('${escapeHtml(leaderName)}', '${leader.employeeType}', 'abnormal', '${statistics.filterDate || ''}', 'Bất thường')">${formatNumber(leader.abnormalCount || 0)}</span></td>
+      `;
+
+      statistics.questions.forEach((question, qIndex) => {
+        question.options.forEach(option => {
+          const label = getOptionLabel(option);
+          const questionNumber = qIndex + 4;
+          const safeLabel = String(label).replace(/'/g, "\\'");
+          const key = `q${questionNumber}_${safeLabel}`;
+          const count = leader[key] || 0;
+          html += `<td><span class="clickable-number" onclick="showEmployeeDetailedModal('${escapeHtml(leaderName)}', '${leader.employeeType}', '${key}', '${statistics.filterDate || ''}', '${safeLabel}')">${formatNumber(count)}</span></td>`;
+        });
+      });
+
+      html += `</tr>`;
+    });
+  });
+
+  html += `</tbody></table>`;
+  container.innerHTML = html;
+}
+
+// ===== EMPLOYEE DETAILED MODAL FUNCTIONS =====
+function showEmployeeDetailedModal(leader, employeeType, answerType, surveyDate, titleText) {
+  try {
+    const shiftSelect = document.getElementById('stats-shift');
+    const selectedShift = shiftSelect ? shiftSelect.value : 'all';
+    
+    const modal = document.getElementById('employee-detailed-modal');
+    const headersContainer = document.getElementById('employee-detailed-headers');
+    const content = document.getElementById('employee-detailed-content');
+    const actionNote = document.getElementById('employee-detailed-action-note');
+    const copyBtn = document.getElementById('modal-copy-btn');
+
+    if (!modal || !headersContainer || !content) {
+      console.warn('showEmployeeDetailedModal: modal elements not found');
+      return;
+    }
+
+    // Lưu context vào dataset (thêm shift)
+    headersContainer.dataset.answerType = answerType || '';
+    headersContainer.dataset.surveyDate = surveyDate || '';
+    headersContainer.dataset.leader = leader || '';
+    headersContainer.dataset.employeeType = employeeType || '';
+    headersContainer.dataset.modalTitle = titleText || '';
+    headersContainer.dataset.shift = selectedShift || '';
+
+    // Mở modal ngay + khóa body scroll
+    modal.classList.add('active');
+    document.body.classList.add('modal-open');
+
+    // Render header đầy đủ
+    let headerHtml = '';
+    
+    if (titleText && String(titleText).trim() !== '') {
+      headerHtml += `<h3 style="margin:0 0 8px 0; text-align:center;">${escapeHtml(String(titleText))}</h3>`;
+    }
+    
+    if (surveyDate) {
+      headerHtml += `<p style="margin:4px 0; text-align:left;">Ngày: ${escapeHtml(surveyDate)}</p>`;
+    }
+    
+    headerHtml += `<p style="margin:4px 0; text-align:left;">Leader: ${escapeHtml(leader || '')}</p>`;
+    
+    // Hiển thị ca được chọn
+    const shiftDisplay = getShiftDisplayName(selectedShift);
+    headerHtml += `<p style="margin:4px 0; text-align:left;">Ca: ${escapeHtml(shiftDisplay)}</p>`;
+    
+    const typeDisplay = employeeType === 'Y' ? 'Support' : 'Normal';
+    headerHtml += `<p style="margin:4px 0; text-align:left;">Loại NV: ${escapeHtml(typeDisplay)}</p>`;
+    
+    headerHtml += `<p style="margin:4px 0; text-align:left;">Danh sách chi tiết:</p>`;
+
+    headersContainer.innerHTML = headerHtml;
+
+    if (actionNote) actionNote.innerHTML = '';
+    
+    content.innerHTML = `
+      <div style="text-align: center; padding: 40px 20px;">
+        <div class="loading" style="margin: 0 auto 15px auto;"></div>
+        <div style="color: #666; font-size: 16px;">Đang tải...</div>
+      </div>
+    `;
+    
+    if (copyBtn) copyBtn.disabled = true;
+
+    google.script.run
+      .withSuccessHandler(function(response) {
+        try {
+          if (!response) {
+            content.innerHTML = `<p class="status-error" style="text-align: center;">Lỗi: dữ liệu trả về rỗng</p>`;
+            if (copyBtn) copyBtn.disabled = true;
+            return;
+          }
+
+          if (!response.success) {
+            content.innerHTML = `<p class="status-error" style="text-align: center;">Lỗi tải dữ liệu: ${escapeHtml(response.error || 'Không xác định')}</p>`;
+            if (copyBtn) copyBtn.disabled = true;
+            return;
+          }
+
+          response._modalTitle = titleText || '';
+          response.leader = leader || '';
+          response.surveyDate = surveyDate || '';
+          response.answerType = answerType || '';
+          response.employeeType = employeeType || '';
+          response.shift = selectedShift || '';
+
+          displayEmployeeDetailedList(response);
+
+          if (copyBtn) {
+            const hasRows = Array.isArray(response.employees) && response.employees.length > 0;
+            copyBtn.disabled = !hasRows;
+          }
+        } catch (e) {
+          console.error('showEmployeeDetailedModal successHandler error:', e);
+          content.innerHTML = `<p class="status-error" style="text-align: center;">Lỗi hiển thị dữ liệu</p>`;
+          if (copyBtn) copyBtn.disabled = true;
+        }
+      })
+      .withFailureHandler(function(error) {
+        console.error('showEmployeeDetailedModal failure:', error);
+        content.innerHTML = `<p class="status-error" style="text-align: center;">Lỗi kết nối: ${escapeHtml((error && error.message) ? error.message : String(error))}</p>`;
+        if (copyBtn) copyBtn.disabled = true;
+      })
+      .getEmployeesDetailedList(leader, employeeType, answerType, surveyDate, selectedShift); // Thêm shift parameter
+  } catch (e) {
+    console.error('showEmployeeDetailedModal error:', e);
+    const content = document.getElementById('employee-detailed-content');
+    if (content) content.innerHTML = `<p class="status-error" style="text-align: center;">Lỗi nội bộ khi mở modal</p>`;
+    const copyBtn = document.getElementById('modal-copy-btn');
+    if (copyBtn) copyBtn.disabled = true;
+  }
+}
+
+function displayEmployeeDetailedList(data) {
+  const content = document.getElementById('employee-detailed-content');
+  const copyBtn = document.getElementById('modal-copy-btn');
+
+  if (!content) return;
+  
+  content.innerHTML = '';
+
+  // Determine mode by answerType
+  const answerType = data.answerType || '';
+  const employees = Array.isArray(data.employees) ? data.employees.slice() : [];
+
+  // Normalize timestamp string to Date for sorting; keep original string for display
+  employees.forEach(emp => {
+    emp._tsDate = null;
+    if (emp.timestamp) {
+      const d = new Date(emp.timestamp);
+      if (!isNaN(d.getTime())) emp._tsDate = d;
+      else {
+        const parsed = parseDateString(emp.timestamp);
+        if (parsed) emp._tsDate = parsed;
+      }
+    }
+  });
+
+  // Sorting rules
+  if (answerType === 'pending' || answerType === 'total') {
+    // Kiểu 1: Pending/Total - sắp xếp theo tên A-Z
+    employees.sort((a, b) => {
+      const na = (a.name || '').toLowerCase();
+      const nb = (b.name || '').toLowerCase();
+      if (na < nb) return -1;
+      if (na > nb) return 1;
+      return 0;
+    });
+  } else {
+    // Kiểu 2: On Leave + Other Answers - sắp xếp theo thời gian (cũ → mới)
+    employees.sort((a, b) => {
+      const ta = a._tsDate ? a._tsDate.getTime() : 0;
+      const tb = b._tsDate ? b._tsDate.getTime() : 0;
+      return ta - tb;
+    });
+  }
+
+  // Build table structure - LUÔN 6 CỘT CHO TẤT CẢ (TRỪ PENDING)
+  let tableHtml = `
+      <table class="stats-table" style="width:100%; white-space: nowrap;">
+        <thead>
+          <tr>
+  `;
+
+  if (answerType === 'pending' || answerType === 'total') {
+    // 🔥 KIỂU 1: PENDING/TOTAL (3 cột)
+    tableHtml += `
+            <th style="text-align: center; width: 60px;">STT</th>
+            <th style="text-align: center; width: 100px;">GEN</th>
+            <th style="text-align: center;">Họ Tên</th>
+          </tr>
+        </thead>
+        <tbody>
+    `;
+    employees.forEach((emp, idx) => {
+      tableHtml += `
+        <tr>
+          <td style="text-align: center;">${idx + 1}</td>
+          <td style="text-align: center;">${escapeHtml(emp.gen)}</td>
+          <td style="text-align: left;">${escapeHtml(emp.name)}</td>
+        </tr>
+      `;
+    });
+  } else {
+    // 🔥 KIỂU 2: TẤT CẢ CÁC LOẠI KHÁC (6 cột)
+    // Đổi tên cột "Loại nghỉ" thành "Đáp án" cho rõ ràng hơn
+    tableHtml += `
+            <th style="text-align: center; width: 60px;">STT</th>
+            <th style="text-align: center; width: 100px;">GEN</th>
+            <th style="text-align: center;">Họ Tên</th>
+            <th style="text-align: center;">Lựa chọn</th>
+            <th style="text-align: center;">Lý do</th>
+            <th style="text-align: center; width: 120px;">Thời gian</th>
+          </tr>
+        </thead>
+        <tbody>
+    `;
+    employees.forEach((emp, idx) => {
+      const ts = emp._tsDate ? formatTimestampModal(emp._tsDate) : '';
+      // Sử dụng emp.leaveType cho "Đáp án" (đã được set trong getEmployeesDetailedList)
+      tableHtml += `
+        <tr>
+          <td style="text-align: center;">${idx + 1}</td>
+          <td style="text-align: center;">${escapeHtml(emp.gen)}</td>
+          <td style="text-align: left;">${escapeHtml(emp.name)}</td>
+          <td style="text-align: left;">${escapeHtml(emp.leaveType || '')}</td>
+          <td style="text-align: left;">${escapeHtml(emp.reason || '')}</td>
+          <td style="text-align: center;">${escapeHtml(ts)}</td>
+        </tr>
+      `;
+    });
+  }
+
+  tableHtml += `</tbody></table>`;
+
+  content.innerHTML = tableHtml;
+
+  if (copyBtn) {
+    copyBtn.disabled = employees.length === 0;
+  }
+}
+
+// Helper: format timestamp to dd/mm HH:mm (bỏ năm)
+function formatTimestampModal(date) {
+  if (!date) return '';
+  const dd = String(date.getDate()).padStart(2, '0');
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const hh = String(date.getHours()).padStart(2, '0');
+  const min = String(date.getMinutes()).padStart(2, '0');
+  return `${dd}/${mm} ${hh}:${min}`;
+}
+
+// Thay thế hàm copyModalContent hiện tại bằng hàm dưới đây
+function copyModalContent() {
+  const headersContainer = document.getElementById('employee-detailed-headers');
+  const contentContainer = document.getElementById('employee-detailed-content');
+
+  if (!contentContainer) {
+    console.warn('copyModalContent: employee-detailed-content not found');
+    return;
+  }
+
+  try {
+    // Lấy context từ dataset
+    const answerType = headersContainer && headersContainer.dataset && headersContainer.dataset.answerType ? headersContainer.dataset.answerType : '';
+    const modalTitle = headersContainer && headersContainer.dataset && headersContainer.dataset.modalTitle ? headersContainer.dataset.modalTitle : '';
+    const surveyDate = headersContainer && headersContainer.dataset && headersContainer.dataset.surveyDate ? headersContainer.dataset.surveyDate : '';
+    const leader = headersContainer && headersContainer.dataset && headersContainer.dataset.leader ? headersContainer.dataset.leader : '';
+
+    // Parse table rows
+    const table = contentContainer.querySelector('table');
+    if (!table) {
+      showModalCopyNote('Không có dữ liệu để sao chép');
+      return;
+    }
+
+    const rows = Array.from(table.querySelectorAll('tbody tr'));
+    if (rows.length === 0) {
+      showModalCopyNote('Không có dữ liệu để sao chép');
+      return;
+    }
+
+    const lines = [];
+
+    // 🔴 THÊM HEADER VÀO COPY
+    if (modalTitle) lines.push(modalTitle);
+    if (surveyDate) lines.push(`Ngày: ${surveyDate}`);
+    if (leader) lines.push(`Leader: ${leader}`);
+    lines.push('Danh sách chi tiết:');
+
+    // Xử lý dữ liệu
+    if (answerType === 'pending' || answerType === 'total') {
+      // Format Pending/Total: GEN[TAB]Họ Tên
+      rows.forEach(tr => {
+        const cells = tr.querySelectorAll('td');
+        if (cells.length >= 3) {
+          const gen = (cells[1].innerText || '').trim();
+          const name = (cells[2].innerText || '').trim();
+          if (gen) lines.push(`${gen}\t${name}`);
+        }
+      });
+    } else {
+      // Format cho tất cả các loại khác: GEN[TAB]Họ Tên[TAB]Đáp án[TAB]Lý do
+      rows.forEach(tr => {
+        const cells = tr.querySelectorAll('td');
+        if (cells.length >= 6) {
+          const gen = (cells[1].innerText || '').trim();
+          const name = (cells[2].innerText || '').trim();
+          const answer = (cells[3].innerText || '').trim();  // Cột "Đáp án"
+          const reason = (cells[4].innerText || '').trim();  // Cột "Lý do"
+          if (gen) lines.push(`${gen}\t${name}\t${answer}\t${reason}`);
+        } else if (cells.length >= 3) {
+          // Fallback
+          const gen = (cells[1].innerText || '').trim();
+          const name = (cells[2].innerText || '').trim();
+          if (gen) lines.push(`${gen}\t${name}`);
+        }
+      });
+    }
+
+    const plain = lines.join('\n').trim();
+    if (!plain || lines.length <= 4) { // Chỉ có header, không có dữ liệu
+      showModalCopyNote('Không có nội dung để sao chép');
+      return;
+    }
+
+    // Thực hiện copy
+    if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(plain).then(function() {
+        showModalCopyNote('✅ Đã sao chép vào clipboard');
+      }).catch(function() {
+        fallbackCopyTextToClipboardModal(plain);
+      });
+    } else {
+      fallbackCopyTextToClipboardModal(plain);
+    }
+
+  } catch (e) {
+    console.error('copyModalContent error', e);
+    showModalCopyNote('Lỗi khi sao chép nội dung');
+  }
+}
+
+
+// Keep or add the modal fallback copy helper (no alert)
+function fallbackCopyTextToClipboardModal(text) {
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.top = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+
+    const successful = document.execCommand && document.execCommand('copy');
+    document.body.removeChild(textarea);
+
+    if (successful) {
+      showModalCopyNote('✅ Đã sao chép vào clipboard');
+    } else {
+      showModalCopyNote('Không thể sao chép tự động. Vui lòng bôi đen và sao chép thủ công.');
+    }
+  } catch (e) {
+    showModalCopyNote('Trình duyệt không hỗ trợ sao chép tự động. Vui lòng bôi đen và sao chép thủ công.');
+  }
+}
+
+// Reuse previously defined showModalCopyNote (hiển thị inline message inside modal)
+
+
+// Helper hiển thị note trong modal (giữ nguyên nếu bạn đã có)
+function showModalCopyNote(message) {
+  try {
+    // 1) Ưu tiên hiển thị ở vùng ngay dưới 2 nút hành động (nếu tồn tại)
+    const actionNoteContainer = document.getElementById('employee-detailed-action-note');
+
+    // Helper tạo/ghi đè note element
+    function renderNote(container) {
+      if (!container) return;
+
+      // Nếu đã có note trước đó, tái sử dụng node
+      let note = container.querySelector('.modal-copy-note');
+      if (!note) {
+        note = document.createElement('div');
+        note.className = 'modal-copy-note';
+        note.style.marginTop = '8px';
+        note.style.color = '#155724';
+        note.style.fontWeight = '600';
+        note.style.textAlign = 'center';
+        container.appendChild(note);
+      }
+      note.textContent = message;
+
+      // Quản lý timeout để tự ẩn sau 4.5s
+      if (note._timeoutId) {
+        clearTimeout(note._timeoutId);
+        note._timeoutId = null;
+      }
+      note._timeoutId = setTimeout(() => {
+        try {
+          if (note && note.parentNode) note.parentNode.removeChild(note);
+        } catch (e) {}
+        note._timeoutId = null;
+      }, 4500);
+    }
+
+    if (actionNoteContainer) {
+      renderNote(actionNoteContainer);
+      return;
+    }
+
+    // 2) Fallback: nếu không tìm thấy actionNoteContainer, sử dụng vùng content (cách cũ)
+    const content = document.getElementById('employee-detailed-content');
+    if (!content) return;
+
+    let note = content.querySelector('.modal-copy-note');
+    if (!note) {
+      note = document.createElement('div');
+      note.className = 'modal-copy-note';
+      note.style.marginTop = '12px';
+      note.style.color = '#155724';
+      note.style.fontWeight = '600';
+      note.style.textAlign = 'center';
+      content.appendChild(note);
+    }
+
+    note.textContent = message;
+
+    if (note._timeoutId) {
+      clearTimeout(note._timeoutId);
+      note._timeoutId = null;
+    }
+
+    note._timeoutId = setTimeout(() => {
+      try {
+        if (note && note.parentNode) note.parentNode.removeChild(note);
+      } catch (e) {}
+      note._timeoutId = null;
+    }, 4500);
+
+  } catch (e) {
+    console.error('showModalCopyNote error:', e);
+  }
+}
+
+
+
+function closeEmployeeDetailedModal() {
+  document.getElementById('employee-detailed-modal').classList.remove('active');
+  document.body.classList.remove('modal-open');
+}
+
+/**
+ * Group leaders by leader name for rowspan
+ */
+function groupLeadersByLeaderName(leaders) {
+  const groups = {};
+  
+  leaders.forEach(leader => {
+    if (!groups[leader.leaderName]) {
+      groups[leader.leaderName] = [];
+    }
+    groups[leader.leaderName].push(leader);
+  });
+  
+  return groups;
+}
+
+// Thêm function để hiển thị danh sách nhân viên
+function showEmployeeList(leader, employeeType, answer) {
+  console.log('Showing employees for:', leader, employeeType, answer);
+  
+  // TODO: Implement employee list modal
+  alert(`Danh sách nhân viên:\nLeader: ${leader}\nLoại: ${employeeType || 'Normal'}\nĐáp án: ${answer}`);
+}
+
+function handleSurveySubmit(event) {
+  event.preventDefault();
+  
+  const submitBtn = document.getElementById('submit-survey-btn');
+  const submitText = document.getElementById('submit-text');
+  const submitLoading = document.getElementById('submit-loading');
+  
+  submitText.textContent = 'Đang gửi...';
+  submitLoading.style.display = 'inline-block';
+  submitBtn.disabled = true;
+  
+  try {
+    const validation = validateSurveyForm();
+    if (!validation.isValid) {
+      showMessage('survey-message', validation.errors.join('<br>'), 'error');
+      resetSubmitButton(submitText, submitLoading, submitBtn);
+      return;
+    }
+    
+    // Collect answers (bao gồm userName và employeeType)
+    const { leader, answers, userName, employeeType } = collectSurveyAnswers();
+    
+    // DEBUG
+    console.log('=== DEBUG SURVEY SUBMIT ===');
+    console.log('Leader:', leader);
+    console.log('User Name:', userName);
+    console.log('Employee Type:', employeeType);
+    console.log('Answers Object:', JSON.stringify(answers, null, 2));
+    
+    if (!leader || Object.keys(answers).length === 0) {
+      showMessage('survey-message', 'Thiếu thông tin bắt buộc. Vui lòng kiểm tra lại form.', 'error');
+      resetSubmitButton(submitText, submitLoading, submitBtn);
+      return;
+    }
+    
+    // Gọi server function với thêm userName và employeeType
+    google.script.run
+      .withSuccessHandler(function(response) {
+        if (response.success) {
+          // 🔴 TẠO THÔNG BÁO CHI TIẾT
+          const detailedMessage = createDetailedSuccessMessage(userName, currentUser.gen, answers);
+          showMessage('survey-message', detailedMessage, 'success'); // 8 giây
+        } else {
+          showMessage('survey-message', 'Lỗi: ' + response.error, 'error');
+        }
+        resetSubmitButton(submitText, submitLoading, submitBtn);
+      })
+      .withFailureHandler(function(error) {
+        showMessage('survey-message', 'Lỗi gửi dữ liệu: ' + error.message, 'error');
+        resetSubmitButton(submitText, submitLoading, submitBtn);
+      })
+      .submitSurveyWithDate(currentUser.gen, leader, answers, userName, employeeType);
+      
+  } catch (error) {
+    showMessage('survey-message', 'Lỗi: ' + error.message, 'error');
+    resetSubmitButton(submitText, submitLoading, submitBtn);
+  }
+}
+
+// Hàm reset form nhưng giữ lại giá trị mặc định
+function resetSurveyForm() {
+  const surveyForm = document.getElementById('survey-form');
+  if (!surveyForm) return;
+  
+  // Reset form
+  surveyForm.reset();
+  
+  // ❌ XÓA phần set default date (vì dùng radio buttons)
+  
+  // ❌ ẨN VÀ RESET CÂU 4
+  const question4Container = document.getElementById('question-4-container');
+  if (question4Container) {
+    question4Container.style.display = 'none';
+    clearQuestion4Data();
+    removeQuestion4Required();
+  }
+  
+  // 🧹 XÓA THÔNG BÁO
+  const surveyMessage = document.getElementById('survey-message');
+  if (surveyMessage) {
+    surveyMessage.style.display = 'none';
+  }
+}
+
+function collectSurveyAnswers() {
+  const answers = {};
+
+  // LẤY LEADER (Câu 1)
+  const leaderDropdown = document.getElementById('leader-dropdown');
+  const leader = leaderDropdown ? leaderDropdown.value : '';
+
+  // LẤY CÂU 2: Xử lý đặc biệt vì có option "Ngày khác"
+  const q2Today = document.getElementById('survey-date-today');
+  const q2Tomorrow = document.getElementById('survey-date-tomorrow');
+  const q2Custom = document.getElementById('survey-date-custom');
+  const customDateInput = document.getElementById('custom-date-input');
+
+  let q2Answer = '';
+  if (q2Today && q2Today.checked) {
+    q2Answer = q2Today.value; // dd/mm/yyyy
+  } else if (q2Tomorrow && q2Tomorrow.checked) {
+    q2Answer = q2Tomorrow.value; // dd/mm/yyyy
+  } else if (q2Custom && q2Custom.checked && customDateInput && customDateInput.value) {
+    // Convert từ yyyy-mm-dd sang dd/mm/yyyy
+    const dateParts = customDateInput.value.split('-');
+    if (dateParts.length === 3) {
+      q2Answer = `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}`;
+    }
+  }
+
+  if (q2Answer) {
+    answers['q2'] = {
+      answer: q2Answer,
+      reason: ''
+    };
+  }
+
+  // LẤY TẤT CẢ CÂU TRẢ LỜI TỪ RADIO BUTTONS (đã checked) - TRỪ CÂU 2
+  const questionInputs = document.querySelectorAll('input[type="radio"]:checked');
+  
+  questionInputs.forEach(input => {
+    const questionId = input.name; // e.g., 'q3', 'q4'
+    
+    // Bỏ qua câu 2 vì đã xử lý ở trên
+    if (questionId === 'q2') return;
+    
+    const answer = input.value;
+
+    answers[questionId] = {
+      answer: answer,
+      reason: ''
+    };
+
+    // Thu thập lý do: tìm option index từ input.id (format q4_opt0)
+    const idParts = (input.id || '').split('_');
+    const lastPart = idParts.length ? idParts[idParts.length - 1] : '';
+    let optionIndex = '';
+    if (lastPart && lastPart.startsWith('opt')) {
+      optionIndex = lastPart.replace('opt', '');
+    }
+
+    // Compose reason input id (new format reason-input-qX-<index>)
+    if (optionIndex !== '') {
+      const reasonInputId = `reason-input-${questionId}-${optionIndex}`;
+      const reasonInput = document.getElementById(reasonInputId);
+      if (reasonInput) {
+        answers[questionId].reason = reasonInput.value.trim();
+      }
+    } else {
+      // Fallback: older single reason-input-qX
+      const fallback = document.getElementById(`reason-input-${questionId}`);
+      if (fallback) {
+        answers[questionId].reason = fallback.value.trim();
+      }
+    }
+  });
+
+  // LẤY THÔNG TIN USER TỪ currentUser
+  const userName = currentUser ? currentUser.name : '';
+  const employeeType = currentUser ? currentUser.employeeType : '';
+
+  console.log('✅ Final collected data:', { leader, answers, userName, employeeType });
+
+  return {
+    leader: leader,
+    answers: answers,
+    userName: userName,
+    employeeType: employeeType
+  };
+}
+
+function shouldCollectAnswer(questionId, q1Answer) {
+  // Luôn thu thập Câu 1
+  if (questionId === 'q1') return true;
+  
+  // Nếu không có đáp án Câu 1, không thu thập gì cả
+  if (!q1Answer) return false;
+  
+  // Chỉ thu thập Câu 2,3 nếu Câu 1 KHÔNG phải là Nghỉ nhóm ca
+  if (questionId === 'q2' || questionId === 'q3') {
+    return q1Answer.value !== 'Nghỉ nhóm ca';
+  }
+  
+  // Thu thập các câu khác
+  return true;
+}
+
+function resetSubmitButton(textElement, loadingElement, button) {
+  if (textElement) {
+    textElement.textContent = '📤 Gửi Kết Quả';
+  }
+  if (loadingElement) {
+    loadingElement.style.display = 'none';
+  }
+  if (button) {
+    button.disabled = false;
+  }
+}
+// ===== INITIALIZE DATE PICKERS =====
+function initializeDatePickers() {
+  setTimeout(() => {
+    initializeDatePicker('stats-date');
+    initializeDatePicker('admin-date');
+    initializeShiftSelector(); 
+  }, 100);
+}
+
+function initializeDatePicker(pickerId) {
+  const dateInput = document.getElementById(pickerId);
+  if (!dateInput) {
+    console.log('❌ Date picker not found:', pickerId);
+    return;
+  }
+
+  // Set giá trị mặc định là hôm nay
+  const today = new Date();
+  const formattedDate = formatDateForPicker(today);
+  dateInput.value = formattedDate;
+  
+  console.log('✅ Date picker initialized:', pickerId, 'value:', formattedDate);
+}
+
+// Hàm chuyển đổi Date object sang định dạng YYYY-MM-DD cho input type="date"
+function formatDateForPicker(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+// Hàm chuyển đổi từ YYYY-MM-DD sang dd/mm/yyyy
+function formatDateFromPicker(dateString) {
+  if (!dateString) return '';
+  
+  const parts = dateString.split('-');
+  if (parts.length === 3) {
+    return `${parts[2]}/${parts[1]}/${parts[0]}`;
+  }
+  return dateString;
+}
+
+    function handlePasswordSubmit(event) {
+      event.preventDefault();
+      console.log('Password submitted');
+      // Will be implemented
+    }
+
+    function handleEditSubmit(event) {
+      event.preventDefault();
+      console.log('Edit submitted');
+      // Will be implemented
+    }
+
+    function closeEditModal() {
+      document.getElementById('edit-modal').classList.remove('active');
+    }
+
+    function closePasswordModal() {
+      document.getElementById('password-modal').classList.remove('active');
+    }
+
+    function closeEmployeeModal() {
+      document.getElementById('employee-modal').classList.remove('active');
+    }
+
+// ===== LOGIN INPUT HANDLING =====
+function restrictToNumbers(input) {
+  input.value = input.value.replace(/[^0-9]/g, '');
+}
+// ===== ADMIN FUNCTIONS =====
+// ===== ADMIN BUTTON HANDLING WITH LOADING STATES =====
+
+function setButtonLoading(button, isLoading) {
+  const btnText = button.querySelector('.btn-text');
+  const btnLoading = button.querySelector('.btn-loading');
+  
+  if (isLoading) {
+    button.disabled = true;
+    btnText.textContent = 'Đang xử lý...';
+    btnLoading.style.display = 'inline-block';
+  } else {
+    button.disabled = false;
+    // Khôi phục text gốc dựa trên class của nút
+    if (button.classList.contains('btn-primary')) {
+      btnText.textContent = 'Đi support';
+    } else if (button.classList.contains('btn-danger')) {
+      btnText.textContent = 'Nghỉ việc';
+    } else if (button.classList.contains('btn-success')) {
+      btnText.textContent = 'Update';
+    }
+    btnLoading.style.display = 'none';
+  }
+}
+
+function handleSupport(button) {
+  const genInput = document.getElementById('admin-gen-input').value.trim();
+  if (!genInput) {
+    showAdminMessage('Vui lòng nhập danh sách GEN', 'error');
+    return;
+  }
+
+  const genCodes = genInput.split(';').map(gen => gen.trim()).filter(gen => gen !== '');
+  
+  // Set trạng thái loading
+  setButtonLoading(button, true);
+
+  google.script.run
+    .withSuccessHandler((response) => {
+      // Kết thúc loading
+      setButtonLoading(button, false);
+      
+      if (response.success) {
+        const message = response.unprocessed.length > 0 
+          ? `✅ Đã hoàn thành. Các GEN sau chưa được xử lý: ${response.unprocessed.join('; ')}`
+          : '✅ Đã hoàn thành';
+        showAdminMessage(message, 'success');
+      } else {
+        showAdminMessage('Lỗi: ' + response.error, 'error');
+      }
+    })
+    .withFailureHandler((error) => {
+      // Kết thúc loading khi có lỗi
+      setButtonLoading(button, false);
+      showAdminMessage('Lỗi kết nối: ' + error.message, 'error');
+    })
+    .processSupport(genCodes);
+}
+
+function handleResign(button) {
+  const genInput = document.getElementById('admin-gen-input').value.trim();
+  if (!genInput) {
+    showAdminMessage('Vui lòng nhập danh sách GEN', 'error');
+    return;
+  }
+
+  const genCodes = genInput.split(';').map(gen => gen.trim()).filter(gen => gen !== '');
+  
+  // Set trạng thái loading
+  setButtonLoading(button, true);
+
+  google.script.run
+    .withSuccessHandler((response) => {
+      // Kết thúc loading
+      setButtonLoading(button, false);
+      
+      if (response.success) {
+        const message = response.unprocessed.length > 0 
+          ? `✅ Đã hoàn thành. Các GEN sau chưa được xử lý: ${response.unprocessed.join('; ')}`
+          : '✅ Đã hoàn thành';
+        showAdminMessage(message, 'success');
+      } else {
+        showAdminMessage('Lỗi: ' + response.error, 'error');
+      }
+    })
+    .withFailureHandler((error) => {
+      // Kết thúc loading khi có lỗi
+      setButtonLoading(button, false);
+      showAdminMessage('Lỗi kết nối: ' + error.message, 'error');
+    })
+    .processResign(genCodes);
+}
+
+function handleUpdate(button) {
+  const genInput = document.getElementById('admin-gen-input').value.trim();
+  if (!genInput) {
+    showAdminMessage('Vui lòng nhập danh sách GEN', 'error');
+    return;
+  }
+
+  const employeeData = genInput.split(';').map(item => item.trim()).filter(item => item !== '');
+  
+  // Set trạng thái loading
+  setButtonLoading(button, true);
+
+  google.script.run
+    .withSuccessHandler((response) => {
+      // Kết thúc loading
+      setButtonLoading(button, false);
+      
+      if (response.success) {
+        const message = response.unprocessed.length > 0 
+          ? `✅ Đã hoàn thành. Các GEN sau chưa được xử lý: ${response.unprocessed.join('; ')}`
+          : '✅ Đã hoàn thành';
+        showAdminMessage(message, 'success');
+      } else {
+        showAdminMessage('Lỗi: ' + response.error, 'error');
+      }
+    })
+    .withFailureHandler((error) => {
+      // Kết thúc loading khi có lỗi
+      setButtonLoading(button, false);
+      showAdminMessage('Lỗi kết nối: ' + error.message, 'error');
+    })
+    .processUpdate(employeeData);
+}
+
+function clearAdminInput() {
+  document.getElementById('admin-gen-input').value = '';
+  document.getElementById('admin-action-message').style.display = 'none';
+}
+
+function showAdminMessage(message, type) {
+  const messageDiv = document.getElementById('admin-action-message');
+  messageDiv.innerHTML = message;
+  messageDiv.className = `status-message status-${type}`;
+  messageDiv.style.display = 'block';
+}
+
+function loadAdminReport() {
+  const dateInput = document.getElementById('admin-date');
+  const selectedDate = dateInput ? formatDateFromPicker(dateInput.value) : '';
+  const container = document.getElementById('admin-report-container');
+
+  // 🔴 SỬA: Căn giữa toàn bộ khối spinner + text
+  container.innerHTML = `
+    <div style="text-align: center; padding: 40px 20px;">
+      <div class="loading" style="margin: 0 auto 15px auto;"></div>
+      <div style="color: #666; font-size: 16px;">Đang tải...</div>
+    </div>
+  `;
+
+  google.script.run
+    .withSuccessHandler((response) => {
+      if (response.success) {
+        displayAdminReport(response.report);
+      } else {
+        container.innerHTML = `<p class="status-error" style="text-align: center;">Lỗi tải báo cáo: ${response.error}</p>`;
+      }
+    })
+    .withFailureHandler((error) => {
+      container.innerHTML = `<p class="status-error" style="text-align: center;">Lỗi kết nối: ${error.message}</p>`;
+    })
+    .getAdminReport(selectedDate);
+}
+
+function displayAdminReport(report) {
+  const container = document.getElementById('admin-report-container');
+  
+  let html = `
+    <div class="report-section" style="margin-bottom: var(--space-xl);">
+      <h3>Nhân viên chưa làm khảo sát</h3>
+      <div id="pending-report-content" style="background: #f8f9fa; padding: 12px; border-radius: 6px; border: 1px solid #ddd; white-space: pre-line; margin-bottom: 10px;">
+        ${escapeHtml(report.pendingReport)}
+      </div>
+      <div style="display: flex; justify-content: center; align-items: center; margin-bottom: 8px;">
+        <button class="btn btn-primary" onclick="copyPendingReport()">📋 COPY</button>
+      </div>
+      <!-- THÔNG BÁO RIÊNG CHO NÚT COPY PHẦN NÀY - HIỂN THỊ Ở DÒNG MỚI -->
+      <div id="pending-copy-message" style="display: none; text-align: center;"></div>
+    </div>
+
+    <div class="report-section">
+      <h3>Tỉ lệ đi làm</h3>
+      <div id="attendance-report-content" style="background: #f8f9fa; padding: 12px; border-radius: 6px; border: 1px solid #ddd; white-space: pre-line; margin-bottom: 10px;">
+        ${escapeHtml(report.attendanceReport)}
+      </div>
+      <div style="display: flex; justify-content: center; gap: var(--space-md); flex-wrap: wrap; margin-bottom: 8px;">
+        <button class="btn btn-primary" onclick="copyAttendanceReport('day')">📋 Ca ngày</button>
+        <button class="btn btn-primary" onclick="copyAttendanceReport('night')">📋 Ca đêm</button>
+      </div>
+      <div id="attendance-copy-message" style="display: none; text-align: center;"></div>
+    </div>
+  `;
+
+  container.innerHTML = html;
+}
+
+function copyPendingReport() {
+  const content = document.getElementById('pending-report-content').innerText;
+  copyTextWithNotification(content, 'pending-copy-message', '✅ Đã sao chép danh sách');
+}
+
+function copyAttendanceReport(shift) {
+  const fullText = document.getElementById('attendance-report-content').innerText;
+  let content = '';
+  
+  // Lấy tiêu đề và ngày từ phần đầu
+  const titleIndex = fullText.indexOf('[CNC PQC 3P]');
+  const dateIndex = fullText.indexOf('Ngày:');
+  const firstShiftIndex = fullText.indexOf('Ca ngày');
+  
+  // Lấy phần header (tiêu đề và ngày)
+  let header = '';
+  if (titleIndex !== -1 && firstShiftIndex !== -1) {
+    header = fullText.substring(titleIndex, firstShiftIndex).trim();
+  }
+  
+  if (shift === 'day') {
+    // Copy ca ngày: lấy từ "Ca ngày" đến trước "Ca đêm"
+    const dayStart = fullText.indexOf('Ca ngày');
+    const nightStart = fullText.indexOf('Ca đêm');
+    
+    if (dayStart !== -1 && nightStart !== -1) {
+      const dayContent = fullText.substring(dayStart, nightStart).trim();
+      content = header + '\n\n' + dayContent;
+    }
+  } else {
+    // Copy ca đêm: chỉ lấy phần "Ca đêm" đến hết
+    const nightStart = fullText.indexOf('Ca đêm');
+    
+    if (nightStart !== -1) {
+      const nightContent = fullText.substring(nightStart).trim();
+      content = header + '\n\n' + nightContent;
+    }
+  }
+  
+  const messageText = `✅ Đã sao chép báo cáo ca ${shift === 'day' ? 'ngày' : 'đêm'}`;
+  copyTextWithNotification(content, 'attendance-copy-message', messageText);
+}
+
+// Hàm copy chung với thông báo inline (giống tab Khảo sát)
+function copyTextWithNotification(text, messageElementId, successMessage) {
+  // Thử dùng clipboard API hiện đại trước
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => {
+      showInlineCopyMessage(messageElementId, successMessage);
+    }).catch(() => {
+      fallbackCopyTextWithNotification(text, messageElementId, successMessage);
+    });
+  } else {
+    fallbackCopyTextWithNotification(text, messageElementId, successMessage);
+  }
+}
+
+// Fallback copy với thông báo inline
+function fallbackCopyTextWithNotification(text, messageElementId, successMessage) {
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.top = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+
+    const successful = document.execCommand('copy');
+    document.body.removeChild(textarea);
+
+    if (successful) {
+      showInlineCopyMessage(messageElementId, successMessage);
+    } else {
+      showInlineCopyMessage(messageElementId, '❌ Không thể sao chép tự động');
+    }
+  } catch (err) {
+    showInlineCopyMessage(messageElementId, '❌ Trình duyệt không hỗ trợ sao chép');
+  }
+}
+
+function showInlineCopyMessage(elementId, message) {
+  const messageElement = document.getElementById(elementId);
+  if (!messageElement) return;
+  
+  messageElement.textContent = message;
+  messageElement.style.display = 'block';
+  messageElement.style.color = '#155724';
+  messageElement.style.fontWeight = '600';
+  messageElement.style.textAlign = 'center';
+  messageElement.style.marginTop = '8px';
+  messageElement.style.padding = '8px 12px';
+  messageElement.style.backgroundColor = '#d4edda';
+  messageElement.style.border = '1px solid #c3e6cb';
+  messageElement.style.borderRadius = '4px';
+  messageElement.style.margin = '8px auto 0 auto';
+  messageElement.style.maxWidth = '300px';
+  
+  // Tự động ẩn sau 3 giây
+  setTimeout(() => {
+    messageElement.style.display = 'none';
+  }, 3000);
+}
+
+function copyToClipboard(text, successMessage) {
+  navigator.clipboard.writeText(text).then(() => {
+    alert(successMessage);
+  }).catch(err => {
+    console.error('Lỗi khi copy: ', err);
+    alert('Lỗi khi copy: ' + err);
+  });
+}
+
+// Khởi tạo date picker cho admin
+function initializeAdminDatePicker() {
+  setTimeout(() => {
+    initializeDatePicker('admin-date');
+  }, 100);
+}
+function getShiftDisplayName(shift) {
+  switch(shift) {
+    case 'day': return 'Ca ngày';
+    case 'night': return 'Ca đêm';
+    case 'all': return 'Cả ngày';
+    default: return shift;
+  }
+}
+
+function checkGenCodeRealTime() {
+  const genCode = document.getElementById('gen-code').value.trim();
+  const userNameDisplay = document.getElementById('user-name-display');
+  const loginBtn = document.getElementById('login-btn');
+  
+  // Reset display
+  userNameDisplay.value = '';
+  loginBtn.disabled = true;
+  
+  // Check if we have exactly 8 digits
+  if (genCode.length === 8 && /^\d{8}$/.test(genCode)) {
+    // Show loading state
+    userNameDisplay.value = 'Đang kiểm tra...';
+    
+    google.script.run
+      .withSuccessHandler(function(userData) {
+        // Success - user found
+        userNameDisplay.value = userData.name || 'Không tìm thấy thông tin';
+        loginBtn.disabled = false; // Enable login button
+      })
+      .withFailureHandler(function(error) {
+        // Error - user not found or other error
+        userNameDisplay.value = 'GEN không hợp lệ';
+        loginBtn.disabled = true;
+      })
+      .checkGenCode(genCode);
+  } else if (genCode.length > 0) {
+    userNameDisplay.value = 'Vui lòng nhập đủ 8 chữ số';
+  }
+}
+// ===== TAB TRA CỨU - LỊCH SỬ KHẢO SÁT =====
+
+/**
+ * Khởi tạo date picker cho tab Tra Cứu với giá trị mặc định:
+ * - Nếu ngày hiện tại <= 5: A = 01/tháng trước, B = ngày cuối/tháng trước
+ * - Nếu ngày hiện tại > 5: A = 01/tháng hiện tại, B = ngày cuối/tháng hiện tại
+ */
+function initializeHistoryDatePickers() {
+  const now = new Date();
+  const day = now.getDate();
+
+  let fromDate, toDate;
+
+  if (day <= 5) {
+    // Tháng trước
+    fromDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    toDate = new Date(now.getFullYear(), now.getMonth(), 0); // Ngày cuối của tháng trước
+  } else {
+    // Tháng hiện tại
+    fromDate = new Date(now.getFullYear(), now.getMonth(), 1);
+    toDate = new Date(now.getFullYear(), now.getMonth() + 1, 0); // Ngày cuối của tháng hiện tại
+  }
+
+  const fromInput = document.getElementById('history-date-from');
+  const toInput = document.getElementById('history-date-to');
+
+  if (fromInput) fromInput.value = formatDateForPicker(fromDate);
+  if (toInput) toInput.value = formatDateForPicker(toDate);
+
+  console.log('History date pickers initialized: from=' + formatDateForPicker(fromDate) + ', to=' + formatDateForPicker(toDate));
+}
+
+/**
+ * Gọi backend tra cứu lịch sử khảo sát theo GEN
+ * - Leader/admin: nếu nhập GEN → tìm theo GEN đó; nếu trống → tìm theo GEN của chính họ
+ * - User thường: luôn tìm theo GEN của chính họ (currentUser.gen)
+ */
+function searchHistory() {
+  const fromInput = document.getElementById('history-date-from');
+  const toInput = document.getElementById('history-date-to');
+
+  const dateFrom = fromInput ? formatDateFromPicker(fromInput.value) : '';
+  const dateTo = toInput ? formatDateFromPicker(toInput.value) : '';
+
+  if (!dateFrom || !dateTo) {
+    const resultsDiv = document.getElementById('history-results');
+    resultsDiv.innerHTML = '<p class="status-error" style="text-align: center;">Vui lòng chọn ngày bắt đầu và ngày kết thúc</p>';
+    resultsDiv.style.display = 'block';
+    return;
+  }
+
+  // Xác định GEN cần tra cứu
+  let targetGen = currentUser.gen; // Mặc định: GEN của chính user
+  const genInput = document.getElementById('history-gen-input');
+  if (genInput) {
+    const inputGen = genInput.value.trim();
+    if (inputGen) {
+      // Leader/admin đã nhập GEN → tìm theo GEN đó
+      targetGen = inputGen;
+    }
+    // Nếu trống → giữ targetGen = currentUser.gen (tìm của chính họ)
+  }
+
+  const resultsDiv = document.getElementById('history-results');
+  const loadingDiv = document.getElementById('history-loading');
+
+  loadingDiv.style.display = 'block';
+  resultsDiv.style.display = 'none';
+
+  google.script.run
+    .withSuccessHandler(function(response) {
+      loadingDiv.style.display = 'none';
+      if (response.success) {
+        displayHistoryResults(response);
+        resultsDiv.style.display = 'block';
+      } else {
+        resultsDiv.innerHTML = '<p class="status-error" style="text-align: center;">Lỗi: ' + escapeHtml(response.error || '') + '</p>';
+        resultsDiv.style.display = 'block';
+      }
+    })
+    .withFailureHandler(function(error) {
+      loadingDiv.style.display = 'none';
+      resultsDiv.innerHTML = '<p class="status-error" style="text-align: center;">Lỗi kết nối: ' + escapeHtml(error.message || '') + '</p>';
+      resultsDiv.style.display = 'block';
+    })
+    .getSurveyHistoryByGen(targetGen, dateFrom, dateTo);
+}
+
+/**
+ * Hiển thị kết quả tra cứu dạng BẢNG + nút copy (copy dạng text)
+ */
+function displayHistoryResults(response) {
+  const container = document.getElementById('history-results');
+  const data = response.data || [];
+  const userName = response.userName || '';
+  const genCode = response.genCode || '';
+
+  if (data.length === 0) {
+    container.innerHTML = '<p class="status-info" style="text-align: center; padding: 20px;">Không có dữ liệu trong khoảng thời gian này</p>';
+    return;
+  }
+
+  // Build text để copy (giữ format text cũ)
+  const lines = [];
+  lines.push(userName + ' - ' + genCode);
+  data.forEach(function(item) {
+    let line = item.surveyDate + ' | ' + item.shift + ' | ' + item.leaveType;
+    if (item.reason) line += ' | ' + item.reason;
+    if (item.timestamp) line += ' | ' + item.timestamp;
+    lines.push(line);
+  });
+  const text = lines.join('\n');
+  container.dataset.historyText = text;
+
+  // Render BẢNG
+  let html = '<p style="font-weight: 600; margin-bottom: 8px;">' + escapeHtml(userName) + ' - ' + escapeHtml(genCode) + '</p>';
+  html += '<div style="overflow-x: auto;">';
+  html += '<table class="stats-table" style="width: 100%; white-space: nowrap;">';
+  html += '<thead><tr>';
+  html += '<th style="text-align: center; width: 50px;">STT</th>';
+  html += '<th style="text-align: center;">Ngày</th>';
+  html += '<th style="text-align: center;">Ca</th>';
+  html += '<th style="text-align: center;">Loại nghỉ</th>';
+  html += '<th style="text-align: center;">Lý do</th>';
+  html += '<th style="text-align: center;">Thời gian</th>';
+  html += '</tr></thead><tbody>';
+
+  data.forEach(function(item, idx) {
+    html += '<tr>';
+    html += '<td style="text-align: center;">' + (idx + 1) + '</td>';
+    html += '<td style="text-align: center;">' + escapeHtml(item.surveyDate || '') + '</td>';
+    html += '<td style="text-align: center;">' + escapeHtml(item.shift || '') + '</td>';
+    html += '<td style="text-align: left;">' + escapeHtml(item.leaveType || '') + '</td>';
+    html += '<td style="text-align: left;">' + escapeHtml(item.reason || '') + '</td>';
+    html += '<td style="text-align: center;">' + escapeHtml(item.timestamp || '') + '</td>';
+    html += '</tr>';
+  });
+
+  html += '</tbody></table></div>';
+  html += '<div style="display: flex; justify-content: center; margin-top: 10px;">';
+  html += '<button class="btn btn-primary" onclick="copyHistoryResults()" style="padding: 8px 16px;">📋 Sao chép</button>';
+  html += '</div>';
+  html += '<div id="history-copy-message" style="display: none; text-align: center; margin-top: 8px;"></div>';
+
+  container.innerHTML = html;
+}
+
+/**
+ * Copy kết quả tra cứu vào clipboard
+ */
+function copyHistoryResults() {
+  const container = document.getElementById('history-results');
+  const text = container.dataset.historyText || '';
+
+  if (!text) {
+    showHistoryCopyMessage('Không có nội dung để sao chép');
+    return;
+  }
+
+  if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function() {
+      showHistoryCopyMessage('✅ Đã sao chép vào clipboard');
+    }).catch(function() {
+      fallbackCopyHistory(text);
+    });
+  } else {
+    fallbackCopyHistory(text);
+  }
+}
+
+/**
+ * Fallback copy cho trình duyệt cũ
+ */
+function fallbackCopyHistory(text) {
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.top = '-9999px';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+
+    const successful = document.execCommand('copy');
+    document.body.removeChild(textarea);
+
+    if (successful) {
+      showHistoryCopyMessage('✅ Đã sao chép vào clipboard');
+    } else {
+      showHistoryCopyMessage('❌ Không thể sao chép tự động. Vui lòng bôi đen thủ công.');
+    }
+  } catch (e) {
+    showHistoryCopyMessage('❌ Trình duyệt không hỗ trợ sao chép tự động');
+  }
+}
+
+/**
+ * Hiển thị thông báo copy trong tab Tra Cứu
+ */
+function showHistoryCopyMessage(message) {
+  const msgEl = document.getElementById('history-copy-message');
+  if (!msgEl) return;
+  msgEl.textContent = message;
+  msgEl.style.display = 'block';
+  msgEl.style.color = '#155724';
+  msgEl.style.fontWeight = '600';
+  msgEl.style.padding = '8px 12px';
+  msgEl.style.backgroundColor = '#d4edda';
+  msgEl.style.border = '1px solid #c3e6cb';
+  msgEl.style.borderRadius = '4px';
+  msgEl.style.maxWidth = '300px';
+  msgEl.style.margin = '8px auto 0 auto';
+
+  setTimeout(function() {
+    msgEl.style.display = 'none';
+  }, 3000);
+}
+
+// ===== EXPORT EXCEL FUNCTIONS =====
+
+/**
+ * Helper: download CSV content as file
+ */
+function downloadCSV(csvContent, filename) {
+  try {
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    if (link.download !== undefined) {
+      const url = URL.createObjectURL(blob);
+      link.setAttribute('href', url);
+      link.setAttribute('download', filename);
+      link.style.visibility = 'hidden';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } else {
+      // Fallback for very old browsers
+      const encodedUri = 'data:text/csv;charset=utf-8,' + encodeURIComponent(csvContent);
+      window.open(encodedUri);
+    }
+  } catch (e) {
+    console.error('downloadCSV error:', e);
+    alert('Lỗi khi tải file: ' + e.message);
+  }
+}
+
+/**
+ * Export all employees (Admin only)
+ * Calls backend exportAllEmployeesCSV() and downloads the CSV file
+ */
+function exportAllEmployees(button) {
+  const btnText = button.querySelector('.btn-text');
+  const btnLoading = button.querySelector('.btn-loading');
+  const msgDiv = document.getElementById('export-employees-message');
+
+  // Set loading state
+  button.disabled = true;
+  if (btnText) btnText.textContent = 'Đang xuất...';
+  if (btnLoading) btnLoading.style.display = 'inline-block';
+
+  google.script.run
+    .withSuccessHandler(function(response) {
+      // Reset button
+      button.disabled = false;
+      if (btnText) btnText.textContent = '📥 Export Excel';
+      if (btnLoading) btnLoading.style.display = 'none';
+
+      if (response && response.success) {
+        downloadCSV(response.csv, response.filename);
+        if (msgDiv) {
+          msgDiv.innerHTML = '✅ Đã xuất ' + response.count + ' nhân viên';
+          msgDiv.className = 'status-message status-success';
+          msgDiv.style.display = 'block';
+          setTimeout(function() { msgDiv.style.display = 'none'; }, 4000);
+        }
+      } else {
+        if (msgDiv) {
+          msgDiv.innerHTML = '❌ Lỗi: ' + escapeHtml((response && response.error) || 'Không xác định');
+          msgDiv.className = 'status-message status-error';
+          msgDiv.style.display = 'block';
+        }
+      }
+    })
+    .withFailureHandler(function(error) {
+      // Reset button
+      button.disabled = false;
+      if (btnText) btnText.textContent = '📥 Export Excel';
+      if (btnLoading) btnLoading.style.display = 'none';
+
+      if (msgDiv) {
+        msgDiv.innerHTML = '❌ Lỗi kết nối: ' + escapeHtml(error.message || String(error));
+        msgDiv.className = 'status-message status-error';
+        msgDiv.style.display = 'block';
+      }
+    })
+    .exportAllEmployeesCSV();
+}
+
+/**
+ * Export survey results by date range (Leader+)
+ * Uses the date range from Tra Cứu tab's date pickers
+ */
+function exportSurveyResults(button) {
+  const fromInput = document.getElementById('history-date-from');
+  const toInput = document.getElementById('history-date-to');
+
+  const dateFrom = fromInput ? formatDateFromPicker(fromInput.value) : '';
+  const dateTo = toInput ? formatDateFromPicker(toInput.value) : '';
+
+  if (!dateFrom || !dateTo) {
+    const msgDiv = document.getElementById('history-export-message');
+    if (msgDiv) {
+      msgDiv.innerHTML = '❌ Vui lòng chọn ngày bắt đầu và ngày kết thúc';
+      msgDiv.className = 'status-message status-error';
+      msgDiv.style.display = 'block';
+    }
+    return;
+  }
+
+  const btnText = button.querySelector('.btn-text');
+  const btnLoading = button.querySelector('.btn-loading');
+  const msgDiv = document.getElementById('history-export-message');
+
+  // Set loading state
+  button.disabled = true;
+  if (btnText) btnText.textContent = 'Đang xuất...';
+  if (btnLoading) btnLoading.style.display = 'inline-block';
+
+  google.script.run
+    .withSuccessHandler(function(response) {
+      // Reset button
+      button.disabled = false;
+      if (btnText) btnText.textContent = '📥 Export Excel';
+      if (btnLoading) btnLoading.style.display = 'none';
+
+      if (response && response.success) {
+        downloadCSV(response.csv, response.filename);
+        if (msgDiv) {
+          msgDiv.innerHTML = '✅ Đã xuất ' + response.count + ' bản ghi khảo sát';
+          msgDiv.className = 'status-message status-success';
+          msgDiv.style.display = 'block';
+          setTimeout(function() { msgDiv.style.display = 'none'; }, 4000);
+        }
+      } else {
+        if (msgDiv) {
+          msgDiv.innerHTML = '❌ Lỗi: ' + escapeHtml((response && response.error) || 'Không xác định');
+          msgDiv.className = 'status-message status-error';
+          msgDiv.style.display = 'block';
+        }
+      }
+    })
+    .withFailureHandler(function(error) {
+      // Reset button
+      button.disabled = false;
+      if (btnText) btnText.textContent = '📥 Export Excel';
+      if (btnLoading) btnLoading.style.display = 'none';
+
+      if (msgDiv) {
+        msgDiv.innerHTML = '❌ Lỗi kết nối: ' + escapeHtml(error.message || String(error));
+        msgDiv.className = 'status-message status-error';
+        msgDiv.style.display = 'block';
+      }
+    })
+    .exportSurveyResultsCSV(dateFrom, dateTo);
+}
+      </script>
+</body>
+
+</html>

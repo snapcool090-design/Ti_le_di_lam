@@ -1,0 +1,2373 @@
+// code.gs - PHIÊN BẢN ĐÃ TỐI ƯU
+// 
+// CÁC THAY ĐỔI CHÍNH SO VỚI BẢN GỐC:
+// 1. getSurveyQuestions(): đọc batch bằng getValues() thay vì cell-by-cell
+// 2. THÊM buildSurveyLookupMap(): tra cứu O(1) thay vì tìm tuyến tính
+// 3. THÊM loadMasterQuestionsData(): gộp 3 lần đọc sheet thành 1
+// 4. getStatisticsForUI(): dùng Map + group nhân viên 1 lần
+// 5. getPendingEmployeesByLeader(): dùng Map
+// 6. getEmployeesDetailedList(): lọc 1 lần + dùng Map
+// 7. getAdminReport(): dùng Map
+// 8. processSupport(): batch write thay vì cell-by-cell
+// 9. processResign(): SỬA BUG unprocessed luôn rỗng
+// 10. processUpdate(): set number format 1 lần cho cả cột + ghi 1 lần/hàng
+// 11. submitSurveyWithDate(): truyền questions thay vì đọc lại
+// 12. prepareSurveyRowDataWithDate(): nhận questions làm tham số
+// 13. verifyAdminPassword(): hash SHA-256 (backward compatible)
+// 14. hasSubmittedRequiredQuestions(): xóa tham số không dùng
+// 15. XÓA checkMatchingAnswer() (dead code)
+
+const CONFIG = {
+  SHEETS: {
+    EMPLOYEE_MASTER: 'Employee_Master',
+    MASTER_QUESTIONS: 'Master_Questions', 
+    SURVEY_RESULTS: 'Survey_Results',
+    DI_SUPPORT: 'Di_support'
+  },
+  USER_ROLES: {
+    ADMIN: 'admin',
+    LEADER: 'leader', 
+    USER: 'user'
+  },
+  ANSWER_TYPES: {
+    NORMAL: '',
+    SPECIAL: 'Y'
+  },
+  COLUMNS: {
+    EMPLOYEE_MASTER: {
+      NAME: 0,        // Column A (index 0) - "Name"
+      GEN: 1,         // Column B (index 1) - "Gen" 
+      LEADER_ID: 2,   // Column C (index 2) - "Leader"
+      LEADER_NAME: 3, // Column D (index 3) - "Leader" 
+      EMPLOYEE_TYPE: 4, // Column E (index 4) - "Có đi Support không"
+      RESIGNED: 5,    // Column F (index 5) - "Nghỉ việc"
+      ADMIN_ROLE: 6   // Column G (index 6) - "Quyền Admin"
+    }
+  }
+};
+
+// ===== SURVEY_RESULTS COLUMN MAPPING (0-based) =====
+const SR_COL = {
+  TIMESTAMP: 0,       // A
+  LAST_EDITED: 1,     // B
+  GEN: 2,             // C
+  NAME: 3,            // D
+  LEADER: 4,          // E
+  EMPLOYEE_TYPE: 5,   // F
+  SURVEY_DATE: 6,     // G
+  Q3: 7,              // H (Câu 3)
+  Q4_ANSWER: 8        // I (Câu 4 answer)
+};
+
+// Helper: returns answer column for dynamic question qIndex (0 => Q4)
+function getAnswerColForQuestionIndex(qIndex) {
+  return SR_COL.Q4_ANSWER + qIndex * 2;
+}
+
+// Helper: returns reason column for dynamic question qIndex (0 => Q4 reason)
+function getReasonColForQuestionIndex(qIndex) {
+  return SR_COL.Q4_ANSWER + qIndex * 2 + 1;
+}
+
+// Safe read cell to string
+function cellToString(row, col) {
+  if (!row) return '';
+  if (col < 0) return '';
+  if (col >= row.length) return '';
+  const v = row[col];
+  if (v == null) return '';
+  return String(v).trim();
+}
+
+// ===== CORE SHEET OPERATIONS =====
+function getSheetData(sheetName) {
+  try {
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = spreadsheet.getSheetByName(sheetName);
+
+    if (!sheet) {
+      throw new Error(`Sheet '${sheetName}' not found`);
+    }
+
+    const dataRange = sheet.getDataRange();
+    const values = dataRange.getValues();
+
+    Logger.log(`Loaded ${values.length} rows from ${sheetName}`);
+    return values;
+
+  } catch (error) {
+    Logger.log(`Error in getSheetData: ${error.message}`);
+    throw error;
+  }
+}
+
+function getSheetByName(sheetName) {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = spreadsheet.getSheetByName(sheetName);
+
+  if (!sheet) {
+    throw new Error(`Sheet '${sheetName}' not found`);
+  }
+
+  return sheet;
+}
+
+// ===== Kiểm tra thông tin nhân viên và Role =====
+
+function getUserData(genCode) {
+  const sheetData = getSheetData(CONFIG.SHEETS.EMPLOYEE_MASTER);
+  
+  for (let i = 1; i < sheetData.length; i++) {
+    const row = sheetData[i];
+    const rowGen = row[CONFIG.COLUMNS.EMPLOYEE_MASTER.GEN]?.toString().trim();
+    
+    if (rowGen === genCode.trim()) {
+      return {
+        gen: row[CONFIG.COLUMNS.EMPLOYEE_MASTER.GEN],
+        name: row[CONFIG.COLUMNS.EMPLOYEE_MASTER.NAME],
+        leaderId: row[CONFIG.COLUMNS.EMPLOYEE_MASTER.LEADER_ID],
+        leaderName: row[CONFIG.COLUMNS.EMPLOYEE_MASTER.LEADER_NAME],
+        employeeType: row[CONFIG.COLUMNS.EMPLOYEE_MASTER.EMPLOYEE_TYPE],
+        resigned: row[CONFIG.COLUMNS.EMPLOYEE_MASTER.RESIGNED],
+        adminRole: row[CONFIG.COLUMNS.EMPLOYEE_MASTER.ADMIN_ROLE],
+        rowIndex: i + 1
+      };
+    }
+  }
+  return null;
+}
+
+function findUserInMaster(genCode) {
+  try {
+    if (!genCode || genCode.trim() === '') throw new Error('GEN không được để trống');
+    const user = getUserData(genCode);
+    if (!user) throw new Error('Không tìm thấy nhân viên trong Employee_Master');
+    return user;
+  } catch (err) {
+    Logger.log(`findUserInMaster error: ${err.message}`);
+    throw err;
+  }
+}
+
+function checkGenCode(genCode) {
+  try {
+    if (!genCode || genCode.trim() === '') {
+      throw new Error('GEN không được để trống');
+    }
+    
+    const userData = findUserInMaster(genCode);
+    if (!userData) {
+      throw new Error('Không tìm thấy nhân viên trong Employee_Master');
+    }
+    
+    // Kiểm tra đã nghỉ việc chưa
+    if (userData.resigned && userData.resigned.toString().trim() !== '') {
+      throw new Error('Tài khoản đã nghỉ việc');
+    }
+    
+    // Xác định role
+    userData.role = determineUserRole(userData);
+    
+    Logger.log(`✓ checkGenCode: ${userData.name} (${userData.role})`);
+    return userData;
+    
+  } catch (error) {
+    Logger.log(`checkGenCode error: ${error.message}`);
+    throw error;
+  }
+}
+
+function determineUserRole(userData) {
+  try {
+    if (!userData) {
+      Logger.log('determineUserRole: userData is null or undefined');
+      return CONFIG.USER_ROLES.USER;
+    }
+    
+    const adminRole = userData.adminRole?.toString().trim().toUpperCase() || '';
+    
+    Logger.log(`determineUserRole: raw adminRole = "${userData.adminRole}", normalized = "${adminRole}"`);
+    
+    if (adminRole === 'ADMIN') {
+      return CONFIG.USER_ROLES.ADMIN;
+    }
+    if (adminRole === 'LEADER') {
+      return CONFIG.USER_ROLES.LEADER;
+    }
+    
+    return CONFIG.USER_ROLES.USER;
+    
+  } catch (error) {
+    Logger.log(`Error in determineUserRole: ${error.message}`);
+    return CONFIG.USER_ROLES.USER;
+  }
+}
+
+// ===== Quản lý câu hỏi =====
+// ✅ TỐI ƯU: Đọc toàn bộ sheet 1 lần bằng getValues() thay vì cell-by-cell
+function getSurveyQuestions() {
+  try {
+    const sheet = getSheetByName(CONFIG.SHEETS.MASTER_QUESTIONS);
+    const lastRow = sheet.getLastRow();
+    const lastColumn = sheet.getLastColumn();
+
+    if (lastRow < 1 || lastColumn < 7) return [];
+
+    // ✅ Đọc TOÀN BỘ sheet 1 LẦN DUY NHẤT (thay vì N×M lần getValue)
+    const allData = sheet.getRange(1, 1, lastRow, lastColumn).getValues();
+    const headers = allData[0];
+
+    const questions = [];
+
+    // Duyệt qua các cột từ G (index 6) trở đi để tìm câu hỏi
+    for (let colIndex = 6; colIndex < lastColumn; colIndex++) {
+      const questionText = headers[colIndex] ? String(headers[colIndex]).trim() : '';
+      if (!questionText) continue;
+
+      const options = [];
+
+      // Lấy options: mỗi cell trong cột này (từ row 2)
+      for (let rowIndex = 1; rowIndex < allData.length; rowIndex++) {
+        const cellValue = allData[rowIndex][colIndex];
+        if (cellValue != null && String(cellValue).trim() !== '') {
+          const optText = String(cellValue).trim();
+
+          // Đọc placeholder trong cùng hàng, cột F (index 5) - đã có sẵn trong allData
+          const phCell = allData[rowIndex][5];
+          let placeholder = '';
+          if (phCell != null && String(phCell).trim() !== '') {
+            placeholder = String(phCell).trim();
+          }
+
+          options.push({
+            value: optText,
+            placeholder: placeholder
+          });
+        }
+      }
+
+      if (options.length > 0) {
+        const questionId = 'q' + (questions.length + 4);
+        questions.push({
+          id: questionId,
+          text: questionText,
+          options: options
+        });
+
+        Logger.log('Found question: ' + questionId + ' - ' + questionText + ' - Options: ' + options.length);
+      }
+    }
+
+    Logger.log('Total dynamic questions found: ' + questions.length);
+    return questions;
+
+  } catch (error) {
+    Logger.log('Error getting survey questions: ' + error.message);
+    return [];
+  }
+}
+
+// ✅ MỚI: Gộp 3 lần đọc Master_Questions thành 1 lần
+// Trả về { questions, mapping, leaders } trong 1 lần đọc sheet duy nhất
+function loadMasterQuestionsData() {
+  try {
+    const sheet = getSheetByName(CONFIG.SHEETS.MASTER_QUESTIONS);
+    const lastRow = sheet.getLastRow();
+    const lastColumn = sheet.getLastColumn();
+
+    if (lastRow < 1) return { questions: [], mapping: {}, leaders: [] };
+
+    // ✅ Đọc 1 LẦN DUY NHẤT
+    const allData = sheet.getRange(1, 1, lastRow, lastColumn).getValues();
+    const headers = allData[0];
+
+    // 1. Questions (từ cột G trở đi)
+    const questions = [];
+    for (let colIndex = 6; colIndex < lastColumn; colIndex++) {
+      const questionText = headers[colIndex] ? String(headers[colIndex]).trim() : '';
+      if (!questionText) continue;
+
+      const options = [];
+      for (let rowIndex = 1; rowIndex < allData.length; rowIndex++) {
+        const cellValue = allData[rowIndex][colIndex];
+        if (cellValue != null && String(cellValue).trim() !== '') {
+          const phCell = allData[rowIndex][5];
+          const placeholder = (phCell != null && String(phCell).trim() !== '')
+            ? String(phCell).trim() : '';
+          options.push({ value: String(cellValue).trim(), placeholder: placeholder });
+        }
+      }
+
+      if (options.length > 0) {
+        questions.push({ id: 'q' + (questions.length + 4), text: questionText, options: options });
+      }
+    }
+
+    // 2. Q4 Mapping (cột D, E, F)
+    const mapping = {};
+    for (let i = 1; i < allData.length; i++) {
+      const detail = allData[i][3] ? String(allData[i][3]).trim() : '';
+      const group = allData[i][4] ? String(allData[i][4]).trim() : '';
+      const placeholder = allData[i][5] ? String(allData[i][5]).trim() : '';
+      if (detail) {
+        mapping[detail] = { group: group || '', placeholder: placeholder || '' };
+      }
+    }
+
+    // 3. Leaders (cột B)
+    const leaders = [];
+    for (let i = 1; i < allData.length; i++) {
+      const v = allData[i][1];
+      if (v != null && String(v).trim() !== '') {
+        leaders.push(String(v).trim());
+      }
+    }
+
+    return { questions: questions, mapping: mapping, leaders: leaders };
+
+  } catch (error) {
+    Logger.log('Error in loadMasterQuestionsData: ' + error.message);
+    return { questions: [], mapping: {}, leaders: [] };
+  }
+}
+
+// ✅ MỚI: Xây dựng Map tra cứu O(1) cho survey results theo GEN
+// Thay thế findSurveyResultByGen trong các vòng lặp
+function buildSurveyLookupMap(surveyData, surveyDate) {
+  const map = {}; // key: GEN → row
+  const targetDate = surveyDate ? normalizeToDateOnly(surveyDate) : null;
+
+  // Detect header
+  let startIndex = 0;
+  const firstRow = surveyData[0];
+  if (Array.isArray(firstRow) && firstRow.length >= 3) {
+    const cellA1 = String(firstRow[0] || '').trim().toLowerCase();
+    const cellC1 = String(firstRow[SR_COL.GEN] || '').trim().toLowerCase();
+    if (cellA1 === 'timestamp' && cellC1 === 'gen') startIndex = 1;
+  }
+
+  for (let i = startIndex; i < surveyData.length; i++) {
+    const row = surveyData[i];
+    if (!row) continue;
+
+    const rowGen = cellToString(row, SR_COL.GEN);
+    if (!rowGen) continue;
+
+    if (targetDate) {
+      const rowDateCell = row[SR_COL.SURVEY_DATE];
+      if (!rowDateCell) continue;
+      const rowDate = normalizeToDateOnly(rowDateCell);
+      if (!rowDate) continue;
+      if (rowDate.getTime() === targetDate.getTime()) {
+        map[rowGen] = row; // Ghi đè nếu trùng (lấy bản mới nhất)
+      }
+    } else {
+      if (!map[rowGen]) map[rowGen] = row;
+    }
+  }
+  return map;
+}
+
+// ===== UI RENDERING FUNCTIONS =====
+
+function doGet() {
+  return HtmlService.createTemplateFromFile('index.html')
+    .evaluate()
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+    .setTitle('PQC 3P - Tỉ lệ đi làm')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+}
+
+function include(filename) {
+  return HtmlService.createHtmlOutputFromFile(filename).getContent();
+}
+
+function getSurveyDataForUI() {
+  try {
+    const questions = getSurveyQuestions();
+    return {
+      success: true,
+      questions: questions
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+function initializeApplication() {
+  try {
+    Logger.log('=== INITIALIZING APPLICATION ===');
+
+    initializeSurveyResultsSheet();
+
+    const sheetNames = Object.values(CONFIG.SHEETS);
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+
+    sheetNames.forEach(sheetName => {
+      const sheet = spreadsheet.getSheetByName(sheetName);
+      if (!sheet) {
+        Logger.log('⚠️ Sheet not found: ' + sheetName);
+      } else {
+        Logger.log('✓ Sheet found: ' + sheetName + ' (' + sheet.getLastRow() + ' rows)');
+      }
+    });
+
+    Logger.log('=== APPLICATION INITIALIZED ===');
+    return {
+      success: true,
+      message: 'Application initialized successfully'
+    };
+
+  } catch (error) {
+    Logger.log('✗ Initialization failed: ' + error.message);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+// ✅ TỐI ƯU: Dùng Map tra cứu O(1) + group nhân viên 1 lần + đọc Master_Questions 1 lần
+function getStatisticsForUI(surveyDate = null, shift = 'all') {
+  try {
+    let targetDate = null;
+    if (surveyDate) {
+      targetDate = parseDateString(surveyDate);
+      if (!targetDate) throw new Error('Ngày không hợp lệ.');
+    }
+
+    const employeeData = getSheetData(CONFIG.SHEETS.EMPLOYEE_MASTER);
+    const surveyData = getSheetData(CONFIG.SHEETS.SURVEY_RESULTS);
+
+    // ✅ Đọc Master_Questions 1 LẦN (thay vì 3 lần: getSurveyQuestions + getQuestion4Mapping + getLeadersList)
+    const masterData = loadMasterQuestionsData();
+    const rawQuestions = masterData.questions;
+    const leaders = masterData.leaders;
+
+    const question4MappingRaw = masterData.mapping;
+    const question4Mapping = {};
+    Object.keys(question4MappingRaw || {}).forEach(k => {
+      const v = question4MappingRaw[k];
+      question4Mapping[k] = (v && v.group) ? String(v.group) : '';
+    });
+    const question4GroupedOptions = getQuestion4GroupedOptions();
+
+    // 1. Dữ liệu Survey lọc theo NGÀY (Dùng cho Q5 trở đi - Không phân ca)
+    const surveyDataByDateOnly = surveyData.filter((row, idx) => {
+      if (idx === 0) return false;
+      return cellToString(row, 6) === surveyDate;
+    });
+
+    // 2. Dữ liệu Survey lọc theo NGÀY và CA (Chỉ dành cho Q4)
+    let filteredSurveyData = [...surveyDataByDateOnly];
+    if (shift !== 'all') {
+      const shiftFilter = shift === 'day' ? 'Ca ngày' : 'Ca đêm';
+      filteredSurveyData = filteredSurveyData.filter(row => cellToString(row, 7) === shiftFilter);
+    } else {
+      filteredSurveyData = filteredSurveyData.filter(row => cellToString(row, 7) !== 'Nghỉ nhóm ca');
+    }
+
+    // ✅ Xây Map tra cứu O(1) - 1 lần duy nhất
+    const surveyMapByDate = buildSurveyLookupMap(surveyDataByDateOnly, surveyDate);
+    const surveyMapByShift = buildSurveyLookupMap(filteredSurveyData, surveyDate);
+
+    const stats = {
+      leaders: [],
+      questions: rawQuestions.map((q, qIndex) => ({
+        text: q.text,
+        options: qIndex === 0 ? question4GroupedOptions : q.options.map(opt => opt.value),
+        isQuestion4: qIndex === 0
+      })),
+      totals: {
+        normal: { total: 0, pending: 0, onLeaveCount: 0, abnormalCount: 0 },
+        special: { total: 0, pending: 0, onLeaveCount: 0, abnormalCount: 0 }
+      },
+      filterDate: surveyDate,
+      filterShift: shift
+    };
+
+    // Khởi tạo bộ đếm trong Totals
+    stats.questions.forEach((question, qIndex) => {
+      question.options.forEach(optValue => {
+        const key = `q${qIndex + 4}_${optValue}`;
+        stats.totals.normal[key] = 0;
+        stats.totals.special[key] = 0;
+      });
+    });
+
+    // ✅ Group nhân viên theo leader + type - 1 lần duyệt (thay vì filter nhiều lần)
+    const grouped = {};
+    for (let i = 1; i < employeeData.length; i++) {
+      const row = employeeData[i];
+      const isResigned = String(row[CONFIG.COLUMNS.EMPLOYEE_MASTER.RESIGNED] || '').toUpperCase() === 'Y';
+      if (isResigned) continue;
+      const leaderName = row[CONFIG.COLUMNS.EMPLOYEE_MASTER.LEADER_NAME]?.toString().trim();
+      const empType = (row[CONFIG.COLUMNS.EMPLOYEE_MASTER.EMPLOYEE_TYPE] || '').toString().trim();
+      if (!grouped[leaderName]) grouped[leaderName] = { '': [], 'Y': [] };
+      if (!grouped[leaderName][empType]) grouped[leaderName][empType] = [];
+      grouped[leaderName][empType].push(row);
+    }
+
+    leaders.forEach(leaderName => {
+      const leaderEmployees = grouped[leaderName] || { '': [], 'Y': [] };
+
+      ['', 'Y'].forEach(employeeType => {
+        const typeEmployees = leaderEmployees[employeeType] || [];
+
+        const typeStats = { total: typeEmployees.length, pending: 0, onLeaveCount: 0, abnormalCount: 0 };
+        stats.questions.forEach((question, qIndex) => {
+          question.options.forEach(optValue => {
+            typeStats[`q${qIndex + 4}_${optValue}`] = 0;
+          });
+        });
+
+        typeEmployees.forEach(employee => {
+          const genCode = employee[CONFIG.COLUMNS.EMPLOYEE_MASTER.GEN];
+          const genStr = genCode != null ? String(genCode).trim() : '';
+
+          // ✅ Tra cứu O(1) thay vì tìm tuyến tính
+          const resultAnyShift = surveyMapByDate[genStr] || null;
+
+          if (resultAnyShift && hasSubmittedRequiredQuestions(resultAnyShift)) {
+            // ✅ Tra cứu O(1)
+            const resultByShift = surveyMapByShift[genStr] || null;
+
+            // LOGIC: Tách biệt việc đếm Q4 và Q5+
+            stats.questions.forEach((question, qIndex) => {
+              const qNum = qIndex + 4;
+              if (qIndex === 0) {
+                // Q4: Chỉ đếm nếu khớp Ca đang chọn
+                if (resultByShift) {
+                  const q4Answer = cellToString(resultByShift, 8);
+                  if (q4Answer) {
+                    const mappedGroup = question4Mapping[q4Answer] || q4Answer;
+                    const key = `q4_${mappedGroup}`;
+                    if (typeStats[key] !== undefined) typeStats[key]++;
+                    
+                    // Tính OnLeave/Abnormal cho Q4
+                    const leaveGroups = ['Nghỉ phép', 'Nghỉ không lương', 'Nghỉ khác'];
+                    if (leaveGroups.includes(mappedGroup)) typeStats.onLeaveCount++;
+                    if (q4Answer !== 'Đi làm bình thường') typeStats.abnormalCount++;
+                  }
+                }
+              } else {
+                // Q5 trở đi: Đếm dựa trên resultAnyShift (Bỏ qua bộ lọc ca)
+                const answerCol = 8 + (qIndex * 2);
+                const qAnswer = cellToString(resultAnyShift, answerCol);
+                const key = `q${qNum}_${qAnswer}`;
+                if (qAnswer && typeStats[key] !== undefined) {
+                  typeStats[key]++;
+                }
+              }
+            });
+          } else {
+            typeStats.pending++;
+          }
+        });
+
+        stats.leaders.push({ leaderName, employeeType, ...typeStats });
+
+        // Cộng dồn vào Totals
+        const targetTotal = employeeType === 'Y' ? stats.totals.special : stats.totals.normal;
+        targetTotal.total += typeStats.total;
+        targetTotal.pending += typeStats.pending;
+        targetTotal.onLeaveCount += typeStats.onLeaveCount;
+        targetTotal.abnormalCount += typeStats.abnormalCount;
+        
+        stats.questions.forEach((question, qIndex) => {
+          question.options.forEach(optValue => {
+            const key = `q${qIndex + 4}_${optValue}`;
+            targetTotal[key] += typeStats[key];
+          });
+        });
+      });
+    });
+
+    return { success: true, statistics: stats };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+}
+
+// ✅ TỐI ƯU: Xóa tham số questionsLength không dùng
+function hasSubmittedRequiredQuestions(surveyResult) {
+  try {
+    if (!surveyResult || !Array.isArray(surveyResult)) return false;
+
+    const surveyDateCell = surveyResult[SR_COL.SURVEY_DATE];
+    const parsedDate = normalizeToDateOnly(surveyDateCell);
+    
+    return !!parsedDate;
+  } catch (e) {
+    Logger.log('hasSubmittedRequiredQuestions error: ' + (e && e.message));
+    return false;
+  }
+}
+
+/**
+ * Chuẩn hoá một giá trị (Date | string | number) thành Date chỉ có phần ngày.
+ */
+function normalizeToDateOnly(value) {
+  try {
+    if (value == null || value === '') return null;
+
+    if (Object.prototype.toString.call(value) === '[object Date]') {
+      if (isNaN(value.getTime())) return null;
+      const d = new Date(value.getFullYear(), value.getMonth(), value.getDate());
+      d.setHours(0, 0, 0, 0);
+      return d;
+    }
+
+    if (typeof value === 'number' && !isNaN(value)) {
+      const dv = new Date(value);
+      if (isNaN(dv.getTime())) return null;
+      return new Date(dv.getFullYear(), dv.getMonth(), dv.getDate());
+    }
+
+    if (typeof value === 'string') {
+      const s = value.trim();
+
+      // 1) dd/mm/yyyy hoặc d/m/yyyy
+      const regexDMY = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
+      const m1 = s.match(regexDMY);
+      if (m1) {
+        const day = parseInt(m1[1], 10);
+        const month = parseInt(m1[2], 10) - 1;
+        const year = parseInt(m1[3], 10);
+        const dd = new Date(year, month, day);
+        if (dd && dd.getFullYear() === year && dd.getMonth() === month && dd.getDate() === day) {
+          return new Date(year, month, day);
+        }
+        return null;
+      }
+
+      // 2) yyyy-mm-dd
+      const regexYMD = /^(\d{4})-(\d{1,2})-(\d{1,2})$/;
+      const m2 = s.match(regexYMD);
+      if (m2) {
+        const year = parseInt(m2[1], 10);
+        const month = parseInt(m2[2], 10) - 1;
+        const day = parseInt(m2[3], 10);
+        const dd = new Date(year, month, day);
+        if (dd && dd.getFullYear() === year && dd.getMonth() === month && dd.getDate() === day) {
+          return new Date(year, month, day);
+        }
+        return null;
+      }
+
+      // 3) ISO datetime / Date.parse fallback
+      const parsed = Date.parse(s);
+      if (!isNaN(parsed)) {
+        const dv = new Date(parsed);
+        return new Date(dv.getFullYear(), dv.getMonth(), dv.getDate());
+      }
+
+      return null;
+    }
+
+    return null;
+  } catch (e) {
+    Logger.log('normalizeToDateOnly error: ' + (e && e.message));
+    return null;
+  }
+}
+
+function parseDateString(dateStr) {
+  try {
+    if (!dateStr && dateStr !== 0) return null;
+    return normalizeToDateOnly(dateStr);
+  } catch (error) {
+    Logger.log('parseDateString error: ' + (error && error.message));
+    return null;
+  }
+}
+
+function getLeadersList() {
+  try {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName('Master_Questions');
+    if (!sheet) {
+      return { success: false, error: 'Không tìm thấy sheet Master_Questions' };
+    }
+
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) return { success: true, data: [] };
+
+    const range = sheet.getRange(2, 2, lastRow - 1, 1);
+    const values = range.getValues()
+      .flat()
+      .map(v => (v == null ? '' : String(v).trim()))
+      .filter(v => v !== '');
+    
+    return { success: true, data: values };
+
+  } catch (err) {
+    Logger.log('Error getLeadersList: ' + err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+// ✅ ĐÃ XÓA checkMatchingAnswer() - dead code (được thay thế bởi checkMatchingAnswerDetailed)
+
+function onOpen() {
+  const ui = SpreadsheetApp.getUi();
+  ui.createMenu('🚀 Survey System')
+    .addItem('📊 Initialize Application', 'initializeApplication')
+    .addItem('❓ Check Sheets', 'checkSheetsStatus')
+    .addToUi();
+}
+
+function checkSheetsStatus() {
+  try {
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    const sheetNames = Object.values(CONFIG.SHEETS);
+    let message = '=== SHEETS STATUS ===\n\n';
+
+    sheetNames.forEach(sheetName => {
+      const sheet = spreadsheet.getSheetByName(sheetName);
+      if (sheet) {
+        const rowCount = sheet.getLastRow();
+        const colCount = sheet.getLastColumn();
+        message += `✓ ${sheetName}: ${rowCount} rows, ${colCount} columns\n`;
+
+        if (sheetName === CONFIG.SHEETS.SURVEY_RESULTS && rowCount > 0) {
+          const headers = sheet.getRange(1, 1, 1, colCount).getValues()[0];
+          message += `  Headers: ${headers.join(' | ')}\n`;
+        }
+      } else {
+        message += `✗ ${sheetName}: NOT FOUND\n`;
+      }
+      message += '\n';
+    });
+
+    const ui = SpreadsheetApp.getUi();
+    ui.alert('Sheets Status', message, ui.ButtonSet.OK);
+
+  } catch (error) {
+    const ui = SpreadsheetApp.getUi();
+    ui.alert('Error', error.message, ui.ButtonSet.OK);
+  }
+}
+
+function initializeSurveyResultsSheet() {
+  try {
+    const sheet = getSheetByName(CONFIG.SHEETS.SURVEY_RESULTS);
+    
+    const questions = getSurveyQuestions();
+    
+    const headers = [
+      'Timestamp',        // A  
+      'Last_Edited_By',   // B
+      'GEN',              // C
+      'Name',             // D
+      'Leader',           // E
+      'Loại NV',          // F
+      'Ngày khảo sát',    // G
+      'Bạn làm việc:'     // H: Q3
+    ];
+    
+    questions.forEach((question, index) => {
+      const questionNumber = index + 4;
+      headers.push(question.text || (`Q${questionNumber}`));
+      headers.push(`Q${questionNumber}_Phụ`);
+    });
+
+    const existingCols = sheet.getLastColumn() || 0;
+    const expectedCols = headers.length;
+
+    const firstCell = sheet.getRange(1, 1).getValue();
+    if (!firstCell || String(firstCell).trim() === '') {
+      sheet.getRange(1, 1, 1, expectedCols).setValues([headers]);
+      sheet.getRange(1, 1, 1, expectedCols).setFontWeight('bold');
+      sheet.autoResizeColumns(1, expectedCols);
+
+      try {
+        const maxRows = sheet.getMaxRows();
+        if (maxRows >= 2) {
+          sheet.getRange(2, SR_COL.GEN + 1, Math.max(1, maxRows - 1), 1).setNumberFormat('@');
+          sheet.getRange(2, SR_COL.SURVEY_DATE + 1, Math.max(1, maxRows - 1), 1).setNumberFormat('@');
+        }
+      } catch (e) {
+        Logger.log('Warning setting column formats in initializeSurveyResultsSheet: ' + e.message);
+      }
+
+      Logger.log('✓ Survey_Results sheet header initialized with ' + expectedCols + ' columns');
+      return {
+        success: true,
+        headers: headers
+      };
+    }
+
+    if (existingCols < expectedCols) {
+      const needed = expectedCols - existingCols;
+      Logger.log(`Header exists but has fewer cols (existing=${existingCols}, expected=${expectedCols}). Inserting ${needed} columns.`);
+      sheet.insertColumnsAfter(existingCols, needed);
+
+      const newHeaderSlice = headers.slice(existingCols);
+      sheet.getRange(1, existingCols + 1, 1, newHeaderSlice.length).setValues([newHeaderSlice]);
+      sheet.getRange(1, 1, 1, expectedCols).setFontWeight('bold');
+      sheet.autoResizeColumns(1, expectedCols);
+
+      Logger.log('Expanded Survey_Results header to ' + expectedCols + ' columns.');
+      return { success: true, headers: headers };
+    }
+
+    const existingHeader = sheet.getRange(1, 1, 1, existingCols).getValues()[0];
+    Logger.log('Survey_Results header already exists with ' + existingCols + ' columns. No overwrite performed.');
+    return { success: true, headers: existingHeader };
+
+  } catch (error) {
+    Logger.log('✗ Error initializing Survey_Results: ' + error.message);
+    throw error;
+  }
+}
+
+// Giữ nguyên findSurveyResultByGen cho các trường hợp cần tìm đơn lẻ
+// (các vòng lặp lớn đã chuyển sang dùng buildSurveyLookupMap)
+function findSurveyResultByGen(genCode, surveyData, surveyDate = null) {
+  try {
+    if (!surveyData || surveyData.length === 0) return null;
+    if (!genCode || String(genCode).trim() === '') return null;
+
+    const targetGen = String(genCode).trim();
+    const targetDate = surveyDate ? normalizeToDateOnly(surveyDate) : null;
+
+    let hasHeader = false;
+    const firstRow = surveyData[0];
+    
+    if (Array.isArray(firstRow) && firstRow.length >= 3) {
+      const cellA1 = String(firstRow[0] || '').trim().toLowerCase();
+      const cellC1 = String(firstRow[SR_COL.GEN] || '').trim().toLowerCase();
+      hasHeader = (cellA1 === 'timestamp' && cellC1 === 'gen');
+    }
+
+    const startIndex = hasHeader ? 1 : 0;
+
+    for (let i = startIndex; i < surveyData.length; i++) {
+      const row = surveyData[i];
+      if (!row) continue;
+
+      const rowGen = cellToString(row, SR_COL.GEN);
+      if (!rowGen) continue;
+      if (rowGen !== targetGen) continue;
+
+      if (!targetDate) {
+        return row;
+      }
+
+      const rowDateCell = row[SR_COL.SURVEY_DATE];
+      if (!rowDateCell) continue;
+
+      const rowDate = normalizeToDateOnly(rowDateCell);
+      if (!rowDate) continue;
+
+      if (rowDate.getTime() === targetDate.getTime()) {
+        return row;
+      } else {
+        continue;
+      }
+    }
+
+    return null;
+  } catch (error) {
+    Logger.log('findSurveyResultByGen error: ' + (error && error.message));
+    return null;
+  }
+}
+
+// ✅ TỐI ƯU: Dùng Map tra cứu O(1) + đọc Master_Questions 1 lần
+function getPendingEmployeesByLeader(surveyDate = null) {
+  try {
+    Logger.log('=== GETTING PENDING EMPLOYEES BY LEADER ===');
+
+    let targetDate = null;
+    if (surveyDate) {
+      targetDate = parseDateString(surveyDate);
+      if (!targetDate) {
+        throw new Error('Ngày không hợp lệ. Vui lòng sử dụng định dạng dd/mm/yyyy');
+      }
+      Logger.log('Filtering for date: ' + surveyDate);
+    }
+
+    const employeeData = getSheetData(CONFIG.SHEETS.EMPLOYEE_MASTER);
+    const surveyData = getSheetData(CONFIG.SHEETS.SURVEY_RESULTS);
+
+    // ✅ Lọc survey data 1 lần + xây Map 1 lần
+    const filteredSurveyData = targetDate ? 
+      surveyData.filter((row, idx) => {
+        if (!row) return false;
+        if (idx === 0 && Array.isArray(surveyData[0]) && surveyData[0].some(c => typeof c === 'string')) return true;
+        const rowDateCell = row[SR_COL.SURVEY_DATE];
+        if (!rowDateCell) return false;
+        const rowDate = (rowDateCell instanceof Date) ? new Date(rowDateCell.getFullYear(), rowDateCell.getMonth(), rowDateCell.getDate()) : parseDateString(String(rowDateCell).trim());
+        return rowDate && rowDate.getTime() === targetDate.getTime();
+      }) : 
+      surveyData;
+
+    // ✅ Xây Map tra cứu O(1)
+    const surveyMap = buildSurveyLookupMap(filteredSurveyData, surveyDate);
+
+    Logger.log('Total employees: ' + (employeeData.length - 1));
+    Logger.log('Filtered survey results: ' + (filteredSurveyData.length - 1));
+
+    // ✅ Đọc leaders 1 lần (dùng loadMasterQuestionsData hoặc getLeadersList)
+    const leadersResponse = getLeadersList();
+    if (!leadersResponse.success) {
+      throw new Error('Không thể tải danh sách leader: ' + leadersResponse.error);
+    }
+    const leaders = leadersResponse.data;
+
+    const result = [];
+
+    leaders.forEach(leaderName => {
+      const normalEmployees = employeeData.filter((row, index) => {
+        if (index === 0) return false;
+        const rowLeader = row[CONFIG.COLUMNS.EMPLOYEE_MASTER.LEADER_NAME];
+        const empType = row[CONFIG.COLUMNS.EMPLOYEE_MASTER.EMPLOYEE_TYPE] || '';
+        const resigned = row[CONFIG.COLUMNS.EMPLOYEE_MASTER.RESIGNED] || '';
+        return rowLeader && rowLeader.toString().trim() === leaderName &&
+          empType.toString().trim() !== 'Y' &&
+          resigned.toString().trim() === '';
+      });
+
+      Logger.log(`Leader ${leaderName}: ${normalEmployees.length} normal employees`);
+
+      let pendingCount = 0;
+      normalEmployees.forEach(employee => {
+        const genCode = employee[CONFIG.COLUMNS.EMPLOYEE_MASTER.GEN];
+        const genStr = genCode != null ? String(genCode).trim() : '';
+
+        // ✅ Tra cứu O(1) thay vì tìm tuyến tính
+        const surveyResult = surveyMap[genStr] || null;
+
+        if (!surveyResult || !hasSubmittedRequiredQuestions(surveyResult)) {
+          pendingCount++;
+        }
+      });
+
+      result.push({
+        leaderName: leaderName,
+        pendingCount: pendingCount,
+        totalNormalEmployees: normalEmployees.length
+      });
+    });
+
+    Logger.log('=== PENDING EMPLOYEES CALCULATION COMPLETED ===');
+    return {
+      success: true,
+      data: result,
+      filterDate: surveyDate
+    };
+
+  } catch (error) {
+    Logger.log('Error in getPendingEmployeesByLeader: ' + error.message);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+function getEmployeeByGen(gen) {
+  try {
+    if (!gen) throw new Error('Missing gen');
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName('Employee_Master');
+    if (!sheet) throw new Error('Không tìm thấy sheet Employee_Master');
+
+    const dataRange = sheet.getDataRange();
+    const values = dataRange.getValues();
+    for (let i = 1; i < values.length; i++) {
+      const row = values[i];
+      const rowGen = row[1];
+      if (rowGen != null && String(rowGen).trim() === String(gen).trim()) {
+        const name = row[2] != null ? String(row[2]).trim() : '';
+        const leaderName = row[3] != null ? String(row[3]).trim() : '';
+        return { success: true, data: { gen: String(gen).trim(), name: name, leaderName: leaderName, row: i + 1 } };
+      }
+    }
+    return { success: false, error: 'Không tìm thấy nhân viên với GEN: ' + gen };
+  } catch (err) {
+    return { success: false, error: err.message || String(err) };
+  }
+}
+
+function updateEmployeeLeader(gen, newLeaderName) {
+  try {
+    if (!gen) throw new Error('GEN không được để trống');
+    if (newLeaderName == null) newLeaderName = '';
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName(CONFIG.SHEETS.EMPLOYEE_MASTER);
+    if (!sheet) throw new Error('Không tìm thấy sheet Employee_Master');
+
+    const dataRange = sheet.getDataRange();
+    const values = dataRange.getValues();
+
+    // 1. Tìm mã Leader_Code tương ứng với tên Leader mới
+    let newLeaderCode = "";
+    if (newLeaderName.trim() !== "") {
+      for (let i = 1; i < values.length; i++) {
+        const rowLeaderName = String(values[i][CONFIG.COLUMNS.EMPLOYEE_MASTER.LEADER_NAME]).trim();
+        if (rowLeaderName === newLeaderName.trim()) {
+          newLeaderCode = values[i][CONFIG.COLUMNS.EMPLOYEE_MASTER.LEADER_ID];
+          if (newLeaderCode) break;
+        }
+      }
+    }
+
+    // 2. Tìm hàng của nhân viên theo mã GEN và cập nhật
+    let foundRow = -1;
+    for (let i = 1; i < values.length; i++) {
+      const rowGen = values[i][CONFIG.COLUMNS.EMPLOYEE_MASTER.GEN];
+      if (rowGen != null && String(rowGen).trim() === String(gen).trim()) {
+        foundRow = i + 1;
+        break;
+      }
+    }
+
+    if (foundRow === -1) {
+      return { success: false, error: 'Không tìm thấy nhân viên với GEN: ' + gen };
+    }
+
+    // ✅ Ghi 1 lần cho 2 cột (thay vì 2 lần setValue riêng)
+    sheet.getRange(foundRow, CONFIG.COLUMNS.EMPLOYEE_MASTER.LEADER_ID + 1, 1, 2)
+      .setValues([[newLeaderCode, newLeaderName]]);
+
+    Logger.log(`Đã cập nhật NV ${gen}: Leader mới là ${newLeaderName} (Mã: ${newLeaderCode})`);
+
+    return { 
+      success: true, 
+      newLeaderName: newLeaderName, 
+      newLeaderCode: newLeaderCode 
+    };
+  } catch (err) {
+    Logger.log('Lỗi updateEmployeeLeader: ' + err.message);
+    return { success: false, error: err.message || String(err) };
+  }
+}
+
+// ✅ TỐI ƯU: Truyền questions vào prepareSurveyRowDataWithDate thay vì đọc lại
+function submitSurveyWithDate(genCode, leader, answers, userName, employeeType) {
+  try {
+    Logger.log('Submitting survey with date for: ' + genCode);
+
+    const sheet = getSheetByName(CONFIG.SHEETS.SURVEY_RESULTS);
+
+    // Ensure header exists
+    const headerCell = sheet.getRange(1,1).getValue();
+    if (!headerCell || String(headerCell).trim() === '') {
+      Logger.log('Survey_Results header missing or empty; initializing sheet header');
+      initializeSurveyResultsSheet();
+    }
+
+    // ✅ Đọc questions 1 LẦN và truyền vào prepareSurveyRowDataWithDate
+    const questions = getSurveyQuestions();
+
+    const surveyDate = answers.q2 ? answers.q2.answer : '';
+
+    // ✅ Truyền questions vào thay vì để hàm đọc lại
+    const rowData = prepareSurveyRowDataWithDate(genCode, surveyDate, leader, answers, new Date(), userName, employeeType, questions);
+
+    const headerCols = sheet.getLastColumn() || rowData.length;
+
+    if (rowData.length > headerCols) {
+      const needed = rowData.length - headerCols;
+      Logger.log(`RowData has more columns than header (rowData=${rowData.length}, header=${headerCols}). Inserting ${needed} columns.`);
+      sheet.insertColumnsAfter(headerCols, needed);
+
+      const initResp = initializeSurveyResultsSheet();
+      if (initResp && initResp.headers) {
+        Logger.log('Header expanded by initializeSurveyResultsSheet after insert.');
+      }
+    }
+
+    const finalHeaderCols = sheet.getLastColumn() || headerCols;
+    if (rowData.length < finalHeaderCols) {
+      for (let k = rowData.length; k < finalHeaderCols; k++) rowData[k] = '';
+    }
+
+    const surveyData = sheet.getDataRange().getValues();
+    const existingRow = findSurveyResultByGen(genCode, surveyData, surveyDate);
+
+    const lock = LockService.getScriptLock();
+    const lockTimeoutMs = 30000;
+    const acquired = lock.tryLock(lockTimeoutMs);
+    if (!acquired) {
+      throw new Error('Không thể lấy lock để ghi dữ liệu, vui lòng thử lại sau.');
+    }
+
+    try {
+      if (existingRow) {
+        let foundIndex = -1;
+        const firstRow = surveyData[0];
+        const hasHeader = Array.isArray(firstRow) && (firstRow[0] && String(firstRow[0]).toLowerCase().indexOf('timestamp') !== -1 || firstRow.some(c => c && /gen|name|leader|ngày/i.test(String(c))));
+        const startIndex = hasHeader ? 1 : 0;
+
+        for (let i = startIndex; i < surveyData.length; i++) {
+          const row = surveyData[i];
+          if (!row) continue;
+          const rowGen = cellToString(row, SR_COL.GEN);
+          const rowDateCell = row[SR_COL.SURVEY_DATE];
+          if (rowGen === String(genCode).trim()) {
+            const rowDate = normalizeToDateOnly(rowDateCell);
+            const targetDate = normalizeToDateOnly(surveyDate);
+            if ((!rowDate && !targetDate) || (rowDate && targetDate && rowDate.getTime() === targetDate.getTime())) {
+              foundIndex = i;
+              break;
+            }
+          }
+        }
+
+        if (foundIndex === -1) {
+          Logger.log('Existing row matched by content but index not found; falling back to append.');
+        } else {
+          const targetRow = foundIndex + 1;
+          sheet.getRange(targetRow, 1, 1, finalHeaderCols).setValues([rowData]);
+
+          try {
+            sheet.getRange(targetRow, SR_COL.GEN + 1).setNumberFormat('@');
+            sheet.getRange(targetRow, SR_COL.SURVEY_DATE + 1).setNumberFormat('@');
+            sheet.getRange(targetRow, SR_COL.GEN + 1).setValue(String(rowData[SR_COL.GEN]));
+            sheet.getRange(targetRow, SR_COL.SURVEY_DATE + 1).setValue(String(rowData[SR_COL.SURVEY_DATE]));
+          } catch (e) {
+            Logger.log('Warning setting GEN/DATE as text on update: ' + e.message);
+          }
+
+          Logger.log('Updated existing survey result for: ' + genCode + ' at row ' + targetRow);
+          lock.releaseLock();
+          return { success: true, message: 'Cập nhật kết quả khảo sát thành công' };
+        }
+      }
+
+      sheet.appendRow(rowData);
+
+      const newRowIndex = sheet.getLastRow();
+      try {
+        sheet.getRange(newRowIndex, SR_COL.GEN + 1).setNumberFormat('@');
+        sheet.getRange(newRowIndex, SR_COL.SURVEY_DATE + 1).setNumberFormat('@');
+        sheet.getRange(newRowIndex, SR_COL.GEN + 1).setValue(String(rowData[SR_COL.GEN]));
+        sheet.getRange(newRowIndex, SR_COL.SURVEY_DATE + 1).setValue(String(rowData[SR_COL.SURVEY_DATE]));
+      } catch (e) {
+        Logger.log('Warning setting GEN/DATE as text on append: ' + e.message);
+      }
+
+      Logger.log('Added new survey result for: ' + genCode + ' at row ' + newRowIndex);
+      lock.releaseLock();
+      return {
+        success: true,
+        message: 'Cảm ơn bạn đã tham gia khảo sát! Kết quả đã được lưu thành công.'
+      };
+
+    } finally {
+      try {
+        lock.releaseLock();
+      } catch (e) {
+        // ignoring if already released
+      }
+    }
+
+  } catch (error) {
+    Logger.log('Error submitting survey with date: ' + error.message);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+// ✅ TỐI ƯU: Nhận questions làm tham số thay vì đọc lại
+function prepareSurveyRowDataWithDate(genCode, surveyDate, leader, answers, timestamp, userName, employeeType, questions) {
+  // ✅ Dùng questions được truyền vào, không đọc lại
+  if (!questions) {
+    questions = getSurveyQuestions(); // Fallback an toàn
+  }
+  const totalDynamicCols = questions.length * 2;
+  const baseCols = SR_COL.Q4_ANSWER;
+  const totalCols = baseCols + totalDynamicCols;
+
+  const rowData = new Array(totalCols).fill('');
+
+  try {
+    rowData[SR_COL.TIMESTAMP] = timestamp instanceof Date ? timestamp : new Date();
+  } catch (e) {
+    rowData[SR_COL.TIMESTAMP] = new Date();
+  }
+  rowData[SR_COL.LAST_EDITED] = '';
+  rowData[SR_COL.GEN] = String(genCode || '');
+  rowData[SR_COL.NAME] = String(userName || '');
+  rowData[SR_COL.LEADER] = String(leader || '');
+  rowData[SR_COL.EMPLOYEE_TYPE] = String(employeeType || '');
+  rowData[SR_COL.SURVEY_DATE] = (surveyDate instanceof Date) ? Utilities.formatDate(surveyDate, Session.getScriptTimeZone(), 'dd/MM/yyyy') : String(surveyDate || '');
+
+  const q3 = answers['q3'];
+  rowData[SR_COL.Q3] = q3 && q3.answer ? String(q3.answer) : '';
+
+  questions.forEach((question, index) => {
+    const answerCol = getAnswerColForQuestionIndex(index);
+    const reasonCol = getReasonColForQuestionIndex(index);
+
+    const qId = question.id || ('q' + (index + 4));
+    const answerObj = answers[qId];
+
+    if (answerObj) {
+      rowData[answerCol] = answerObj.answer != null ? String(answerObj.answer) : '';
+      rowData[reasonCol] = answerObj.reason != null ? String(answerObj.reason) : '';
+    } else {
+      rowData[answerCol] = rowData[answerCol] || '';
+      rowData[reasonCol] = rowData[reasonCol] || '';
+    }
+  });
+
+  for (let i = 0; i < rowData.length; i++) {
+    if (rowData[i] == null) rowData[i] = '';
+  }
+
+  return rowData;
+}
+
+// ===== QUESTION 4 MAPPING FUNCTIONS =====
+function getQuestion4Mapping() {
+  try {
+    const sheet = getSheetByName(CONFIG.SHEETS.MASTER_QUESTIONS);
+    const data = sheet.getDataRange().getValues();
+    const mapping = {};
+
+    for (let i = 1; i < data.length; i++) {
+      const detail = data[i][3] ? String(data[i][3]).trim() : '';
+      const group = data[i][4] ? String(data[i][4]).trim() : '';
+      const placeholder = data[i][5] ? String(data[i][5]).trim() : '';
+
+      if (detail) {
+        mapping[detail] = { group: group || '', placeholder: placeholder || '' };
+      }
+    }
+    return mapping;
+  } catch (error) {
+    return {};
+  }
+}
+
+function getQuestion4GroupedOptions() {
+  return [
+    'Đi làm bình thường',
+    'Nghỉ phép',
+    'Nghỉ không lương',
+    'Nghỉ khác',  
+    'Đi muộn',  
+    'Nghỉ nửa buổi',
+    'Đi đào tạo',
+  ];
+}
+
+// ✅ TỐI ƯU: Lọc 1 lần trước vòng lặp + dùng Map tra cứu O(1)
+function getEmployeesDetailedList(leader, employeeType, answerType, surveyDate = null, shift = 'all') {
+  try {
+    let targetDate = null;
+    if (surveyDate) {
+      targetDate = parseDateString(surveyDate);
+      if (!targetDate) {
+        throw new Error('Ngày không hợp lệ');
+      }
+    }
+
+    const employeeData = getSheetData(CONFIG.SHEETS.EMPLOYEE_MASTER);
+    const surveyData = getSheetData(CONFIG.SHEETS.SURVEY_RESULTS);
+    const questions = getSurveyQuestions();
+    const question4MappingRaw = getQuestion4Mapping();
+    const question4Mapping = {};
+    Object.keys(question4MappingRaw || {}).forEach(k => {
+      const v = question4MappingRaw[k];
+      question4Mapping[k] = (v && v.group) ? String(v.group) : '';
+    });
+
+    const isQ4Related = answerType === 'pending' || 
+                        answerType === 'onLeave' || 
+                        answerType === 'abnormal' ||
+                        (answerType.startsWith && answerType.startsWith('q4_'));
+    
+    let filteredSurveyData = targetDate ? 
+      surveyData.filter((row, idx) => {
+        if (!row) return false;
+        if (idx === 0) return true;
+        const rowDateCell = row[SR_COL.SURVEY_DATE];
+        if (!rowDateCell) return false;
+        const rowDate = normalizeToDateOnly(rowDateCell);
+        return rowDate && rowDate.getTime() === targetDate.getTime();
+      }) : 
+      surveyData;
+
+    if (isQ4Related && shift !== 'all') {
+      const shiftFilter = shift === 'day' ? 'Ca ngày' : 'Ca đêm';
+      filteredSurveyData = filteredSurveyData.filter((row, idx) => {
+        if (idx === 0) return true;
+        const q3Answer = cellToString(row, SR_COL.Q3);
+        return q3Answer === shiftFilter;
+      });
+    } else if (isQ4Related && shift === 'all') {
+      filteredSurveyData = filteredSurveyData.filter((row, idx) => {
+        if (idx === 0) return true;
+        const q3Answer = cellToString(row, SR_COL.Q3);
+        return q3Answer !== 'Nghỉ nhóm ca';
+      });
+    }
+
+    // ✅ Xây Map tra cứu O(1) cho filteredSurveyData
+    const surveyMap = buildSurveyLookupMap(filteredSurveyData, surveyDate);
+
+    // ✅ Lọc allSurveyData 1 LẦN trước vòng lặp (thay vì lọc lại cho mỗi nhân viên)
+    const allSurveyData = targetDate ? 
+      surveyData.filter((row, idx) => {
+        if (!row) return false;
+        if (idx === 0) return true;
+        const rowDateCell = row[SR_COL.SURVEY_DATE];
+        if (!rowDateCell) return false;
+        const rowDate = normalizeToDateOnly(rowDateCell);
+        return rowDate && rowDate.getTime() === targetDate.getTime();
+      }) : 
+      surveyData;
+
+    // ✅ Xây Map tra cứu O(1) cho allSurveyData (dùng cho pending)
+    const pendingMap = buildSurveyLookupMap(allSurveyData, surveyDate);
+
+    const employees = [];
+    const leaderIsAll = (leader === 'ALL' || leader === '__ALL__' || leader === 'TOTAL');
+
+    for (let i = 1; i < employeeData.length; i++) {
+      const emp = employeeData[i];
+      const empLeader = emp[CONFIG.COLUMNS.EMPLOYEE_MASTER.LEADER_NAME];
+      const empType = (emp[CONFIG.COLUMNS.EMPLOYEE_MASTER.EMPLOYEE_TYPE] || '').toString().trim();
+
+      if (!leaderIsAll) {
+        if (!empLeader || empLeader.toString().trim() !== leader) continue;
+      }
+
+      if (employeeType !== null && employeeType !== undefined && String(employeeType).trim() !== '') {
+        if (empType !== String(employeeType).trim()) continue;
+      } else if (employeeType === '') {
+        if (empType !== '') continue;
+      }
+
+      const resigned = (emp[CONFIG.COLUMNS.EMPLOYEE_MASTER.RESIGNED] || '').toString().trim();
+      if (resigned) continue;
+
+      const genCode = emp[CONFIG.COLUMNS.EMPLOYEE_MASTER.GEN];
+      const genStr = genCode != null ? String(genCode).trim() : '';
+      
+      // ✅ Tra cứu O(1) thay vì tìm tuyến tính
+      const surveyResult = surveyMap[genStr] || null;
+
+      let itemTimestamp = '';
+      let qAnswer = '';
+      let qReason = '';
+
+      if (surveyResult) {
+        const tsCell = surveyResult[SR_COL.TIMESTAMP];
+        if (tsCell instanceof Date && !isNaN(tsCell.getTime())) {
+          itemTimestamp = tsCell.toISOString();
+        } else if (tsCell) {
+          const parsed = parseDateString(String(tsCell));
+          if (parsed) itemTimestamp = parsed.toISOString();
+        }
+
+        if (answerType.startsWith && answerType.startsWith('q')) {
+          const [questionPart, ...answerParts] = answerType.split('_');
+          const questionIndex = parseInt(questionPart.replace('q', '')) - 1;
+          
+          if (questionIndex >= 3) {
+            const dynamicIndex = questionIndex - 3;
+            const ansCol = getAnswerColForQuestionIndex(dynamicIndex);
+            const reasonCol = getReasonColForQuestionIndex(dynamicIndex);
+            
+            qAnswer = cellToString(surveyResult, ansCol);
+            qReason = cellToString(surveyResult, reasonCol);
+          } else if (questionIndex === 2) {
+            qAnswer = cellToString(surveyResult, SR_COL.Q3);
+            qReason = '';
+          }
+        } else if (answerType === 'onLeave' || answerType === 'abnormal') {
+          const q4AnsCol = getAnswerColForQuestionIndex(0);
+          const q4ReasonCol = getReasonColForQuestionIndex(0);
+          qAnswer = cellToString(surveyResult, q4AnsCol);
+          qReason = cellToString(surveyResult, q4ReasonCol);
+        }
+      }
+
+      // LOGIC PHÂN LOẠI
+      if (answerType === 'total') {
+        // Return ALL employees of this leader + employeeType (regardless of survey status)
+        employees.push({
+          gen: String(genCode || '').trim(),
+          name: String(emp[CONFIG.COLUMNS.EMPLOYEE_MASTER.NAME] || '').trim(),
+          leaveType: '',
+          reason: '',
+          timestamp: ''
+        });
+      } else if (answerType === 'pending') {
+        // ✅ Tra cứu O(1) thay vì lọc + tìm tuyến tính
+        const surveyResultForPending = pendingMap[genStr] || null;
+        if (!surveyResultForPending || !hasSubmittedRequiredQuestions(surveyResultForPending)) {
+          employees.push({
+            gen: String(genCode || '').trim(),
+            name: String(emp[CONFIG.COLUMNS.EMPLOYEE_MASTER.NAME] || '').trim(),
+            leaveType: '',
+            reason: '',
+            timestamp: ''
+          });
+        }
+      } else if (answerType === 'onLeave') {
+        if (surveyResult && hasSubmittedRequiredQuestions(surveyResult)) {
+          const mapped = (qAnswer && question4Mapping[qAnswer]) ? question4Mapping[qAnswer] : (qAnswer ? qAnswer : 'Nghỉ nhóm ca');
+          const leaveGroups = ['Nghỉ phép', 'Nghỉ không lương', 'Nghỉ khác'];
+          if (leaveGroups.includes(mapped)) {
+            employees.push({
+              gen: String(genCode || '').trim(),
+              name: String(emp[CONFIG.COLUMNS.EMPLOYEE_MASTER.NAME] || '').trim(),
+              leaveType: qAnswer || '',
+              reason: qReason || '',
+              timestamp: itemTimestamp || ''
+            });
+          }
+        }
+      } else if (answerType === 'abnormal') {
+        if (surveyResult && hasSubmittedRequiredQuestions(surveyResult)) {
+          if (qAnswer && qAnswer !== '' && qAnswer !== 'Đi làm bình thường') {
+            employees.push({
+              gen: String(genCode || '').trim(),
+              name: String(emp[CONFIG.COLUMNS.EMPLOYEE_MASTER.NAME] || '').trim(),
+              leaveType: qAnswer || '',
+              reason: qReason || '',
+              timestamp: itemTimestamp || ''
+            });
+          }
+        }
+      } else if (answerType.startsWith && answerType.startsWith('q')) {
+        if (surveyResult && hasSubmittedRequiredQuestions(surveyResult)) {
+          const matched = checkMatchingAnswerDetailed(surveyResult, answerType, questions, question4Mapping);
+          if (matched) {
+            employees.push({
+              gen: String(genCode || '').trim(),
+              name: String(emp[CONFIG.COLUMNS.EMPLOYEE_MASTER.NAME] || '').trim(),
+              leaveType: qAnswer || '',
+              reason: qReason || '',
+              timestamp: itemTimestamp || ''
+            });
+          }
+        }
+      }
+
+      qAnswer = '';
+      qReason = '';
+    }
+
+    return {
+      success: true,
+      employees: employees,
+      leader: leader,
+      employeeType: employeeType,
+      answerType: answerType,
+      surveyDate: surveyDate,
+      shift: shift
+    };
+
+  } catch (error) {
+    Logger.log('Error getting employees detailed list: ' + error.message);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+function checkMatchingAnswerDetailed(surveyResult, answerType, questions, question4Mapping) {
+  const [questionPart, ...answerParts] = answerType.split('_');
+  const targetAnswer = answerParts.join('_');
+  const questionIndex = parseInt(questionPart.replace('q', '')) - 1;
+
+  if (questionIndex === 2) {
+    const answer = cellToString(surveyResult, SR_COL.Q3);
+    return answer === targetAnswer;
+  } else if (questionIndex >= 3) {
+    const dynamicIndex = questionIndex - 3;
+    const answer = cellToString(surveyResult, getAnswerColForQuestionIndex(dynamicIndex));
+    
+    if (dynamicIndex === 0) {
+      const mapped = (question4Mapping && question4Mapping[answer]) ? question4Mapping[answer] : 'Nghỉ nhóm ca';
+      return mapped === targetAnswer;
+    } else {
+      return answer === targetAnswer;
+    }
+  } else {
+    return false;
+  }
+}
+
+// ===== ADMIN FUNCTIONS - GEN CODE PROCESSING =====
+
+// ✅ TỐI ƯU: Batch write + dùng Set tra cứu (thay vì cell-by-cell)
+function processSupport(genCodes) {
+  try {
+    const sheet = getSheetByName(CONFIG.SHEETS.EMPLOYEE_MASTER);
+    const data = sheet.getDataRange().getValues();
+    const unprocessed = [];
+    const genSet = new Set(genCodes.map(g => String(g).trim()));
+
+    // ✅ Chuẩn bị mảng giá trị để ghi 1 lần
+    const colIndex = CONFIG.COLUMNS.EMPLOYEE_MASTER.EMPLOYEE_TYPE;
+    const valuesToUpdate = [];
+
+    for (let i = 1; i < data.length; i++) {
+      const rowGen = data[i][CONFIG.COLUMNS.EMPLOYEE_MASTER.GEN];
+      const genStr = rowGen != null ? String(rowGen).trim() : '';
+
+      if (genSet.has(genStr)) {
+        valuesToUpdate.push(['Y']);
+        genSet.delete(genStr); // Đánh dấu đã xử lý
+      } else {
+        valuesToUpdate.push(['']); // Reset về rỗng
+      }
+    }
+
+    // ✅ Ghi 1 LẦN DUY NHẤT bằng setValues (thay vì N lần setValue)
+    const numRows = data.length - 1;
+    if (numRows > 0) {
+      sheet.getRange(2, colIndex + 1, numRows, 1).setValues(valuesToUpdate);
+    }
+
+    // Các GEN không tìm thấy
+    unprocessed.push(...Array.from(genSet));
+
+    return {
+      success: true,
+      unprocessed: unprocessed
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+// ✅ TỐI ƯU + SỬA BUG: Dùng Set để kiểm tra trước khi xóa
+// BUG CŨ: data được capture trước khi xóa → kiểm tra trong data cũ → unprocessed luôn rỗng
+function processResign(genCodes) {
+  try {
+    const sheet = getSheetByName(CONFIG.SHEETS.EMPLOYEE_MASTER);
+    const data = sheet.getDataRange().getValues();
+    const genSet = new Set(genCodes.map(g => String(g).trim()));
+    const foundGens = new Set(); // ✅ Theo dõi GEN nào đã tìm thấy
+
+    // Xóa từ dưới lên để tránh lỗi index
+    for (let i = data.length - 1; i >= 1; i--) {
+      const rowGen = data[i][CONFIG.COLUMNS.EMPLOYEE_MASTER.GEN];
+      const genStr = rowGen != null ? String(rowGen).trim() : '';
+      if (genSet.has(genStr)) {
+        sheet.deleteRow(i + 1);
+        foundGens.add(genStr); // ✅ Đánh dấu đã tìm thấy
+      }
+    }
+
+    // ✅ Unprocessed = các GEN không tìm thấy (dùng foundGens, không dùng data cũ)
+    const unprocessed = genCodes
+      .map(g => String(g).trim())
+      .filter(g => !foundGens.has(g));
+
+    return {
+      success: true,
+      unprocessed: unprocessed
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+// ✅ TỐI ƯU: Set number format 1 lần cho cả cột + ghi 1 lần/hàng
+function processUpdate(employeeData) {
+  try {
+    const employeeSheet = getSheetByName(CONFIG.SHEETS.EMPLOYEE_MASTER);
+    const questionSheet = getSheetByName(CONFIG.SHEETS.MASTER_QUESTIONS);
+    const unprocessed = [];
+    
+    // Lấy mapping leader từ Master_Questions
+    const leaderData = questionSheet.getDataRange().getValues();
+    const leaderMap = {};
+    for (let i = 1; i < leaderData.length; i++) {
+      const leaderCode = leaderData[i][0]?.toString().trim();
+      const leaderName = leaderData[i][1]?.toString().trim();
+      if (leaderCode) {
+        leaderMap[leaderCode] = leaderName;
+      }
+    }
+    
+    const allData = employeeSheet.getDataRange().getValues();
+
+    // ✅ Set number format TEXT (@) 1 lần cho cả cột GEN (thay vì từng dòng)
+    const maxRows = employeeSheet.getMaxRows();
+    if (maxRows >= 2) {
+      employeeSheet.getRange(2, CONFIG.COLUMNS.EMPLOYEE_MASTER.GEN + 1, Math.max(1, maxRows - 1), 1).setNumberFormat('@');
+    }
+
+    employeeData.forEach(emp => {
+      const parts = emp.split('_');
+      if (parts.length < 3) {
+        unprocessed.push(emp);
+        return;
+      }
+
+      const gen = String(parts[0]).trim();
+      const name = String(parts[1]).trim();
+      const leaderCode = String(parts[2]).trim();
+      const leaderName = leaderMap[leaderCode] || "";
+      
+      // Tìm xem GEN đã tồn tại chưa
+      let existingRowIndex = -1;
+      for (let i = 1; i < allData.length; i++) {
+        const rowGen = String(allData[i][CONFIG.COLUMNS.EMPLOYEE_MASTER.GEN]).trim();
+        if (rowGen === gen) {
+          existingRowIndex = i + 1;
+          break;
+        }
+      }
+      
+      if (existingRowIndex > 0) {
+        // === CASE 1: UPDATE ===
+        // ✅ Ghi 4 cột 1 lần (thay vì 4 lần setValue riêng)
+        employeeSheet.getRange(existingRowIndex, CONFIG.COLUMNS.EMPLOYEE_MASTER.NAME + 1, 1, 4)
+          .setValues([[name, gen, leaderCode, leaderName]]);
+        
+      } else {
+        // === CASE 2: INSERT NEW ===
+        const newRow = [
+          name,        // A - Name
+          gen,         // B - GEN
+          leaderCode,  // C - Leader ID
+          leaderName,  // D - Leader Name
+          "",          // E - Employee Type
+          ""           // F - Resigned
+        ];
+        
+        employeeSheet.appendRow(newRow);
+      }
+    });
+    
+    return {
+      success: true,
+      unprocessed: unprocessed
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+// ✅ TỐI ƯU: Dùng Map tra cứu O(1) thay vì tìm tuyến tính
+function getAdminReport(surveyDate) {
+  try {
+    const targetDate = parseDateString(surveyDate);
+    if (!targetDate) {
+      throw new Error('Ngày không hợp lệ');
+    }
+    
+    const employeeData = getSheetData(CONFIG.SHEETS.EMPLOYEE_MASTER);
+    const surveyData = getSheetData(CONFIG.SHEETS.SURVEY_RESULTS);
+    const questions = getSurveyQuestions();
+    const question4MappingRaw = getQuestion4Mapping();
+    const question4Mapping = {};
+    Object.keys(question4MappingRaw || {}).forEach(k => {
+      const v = question4MappingRaw[k];
+      question4Mapping[k] = (v && v.group) ? String(v.group) : '';
+    });
+    
+    // Lọc survey data theo ngày
+    const filteredSurveyData = surveyData.filter((row, idx) => {
+      if (!row) return false;
+      if (idx === 0) return true;
+      const rowDateCell = row[SR_COL.SURVEY_DATE];
+      if (!rowDateCell) return false;
+      const rowDate = normalizeToDateOnly(rowDateCell);
+      return rowDate && rowDate.getTime() === targetDate.getTime();
+    });
+    
+    // ✅ Xây Map tra cứu O(1)
+    const surveyMap = buildSurveyLookupMap(filteredSurveyData, surveyDate);
+    
+    // Lấy danh sách leader
+    const leadersResponse = getLeadersList();
+    if (!leadersResponse.success) {
+      throw new Error('Không thể tải danh sách leader');
+    }
+    const leaders = leadersResponse.data;
+    
+    // ===== ĐOẠN 1: Nhân viên chưa làm khảo sát =====
+    let pendingReport = `Số lượng nhân viên chưa làm khảo sát:\nNgày: ${surveyDate}\n`;
+    
+    let totalNormalEmployees = 0;
+    let totalPending = 0;
+    const leaderLines = [];
+    
+    leaders.forEach(leaderName => {
+      const normalEmployees = employeeData.filter((row, index) => {
+        if (index === 0) return false;
+        const rowLeader = row[CONFIG.COLUMNS.EMPLOYEE_MASTER.LEADER_NAME];
+        const empType = row[CONFIG.COLUMNS.EMPLOYEE_MASTER.EMPLOYEE_TYPE] || '';
+        const resigned = row[CONFIG.COLUMNS.EMPLOYEE_MASTER.RESIGNED] || '';
+        return rowLeader && rowLeader.toString().trim() === leaderName &&
+               empType.toString().trim() === '' &&
+               resigned.toString().trim() === '';
+      });
+      
+      let pendingCount = 0;
+      normalEmployees.forEach(employee => {
+        const genCode = employee[CONFIG.COLUMNS.EMPLOYEE_MASTER.GEN];
+        const genStr = genCode != null ? String(genCode).trim() : '';
+        // ✅ Tra cứu O(1) thay vì tìm tuyến tính
+        const surveyResult = surveyMap[genStr] || null;
+        if (!surveyResult || !hasSubmittedRequiredQuestions(surveyResult)) {
+          pendingCount++;
+        }
+      });
+      
+      const formattedPending = pendingCount.toLocaleString();
+      const formattedTotal = normalEmployees.length.toLocaleString();
+      
+      leaderLines.push(`${leaderName}: ${formattedPending}/${formattedTotal}`);
+      totalNormalEmployees += normalEmployees.length;
+      totalPending += pendingCount;
+    });
+    
+    const formattedTotalPending = totalPending.toLocaleString();
+    const formattedTotalNormal = totalNormalEmployees.toLocaleString();
+    pendingReport += `Total: ${formattedTotalPending}/${formattedTotalNormal}\n\n`;
+    pendingReport += leaderLines.join('\n');
+    
+    // ===== ĐOẠN 2: Tỉ lệ đi làm =====
+    let attendanceReport = `[CNC PQC 3P] BÁO CÁO TỈ LỆ ĐI LÀM\nNgày: ${surveyDate}\n\n`;
+
+    ['Ca ngày', 'Ca đêm'].forEach(shift => {
+      attendanceReport += `${shift}\n`;
+      
+      // Tìm tất cả nhân viên đã chọn ca này trong Q3
+      const shiftEmployees = filteredSurveyData.filter((row, idx) => {
+        if (idx === 0) return false;
+        const q3Answer = cellToString(row, SR_COL.Q3);
+        return q3Answer === shift;
+      });
+
+      // Khởi tạo counters
+      let diLamBinhThuongCount = 0;
+      let nghiPhepCount = 0;
+      let nghiKhongLuongCount = 0;
+      let nghiKhacCount = 0;
+      let diDaoTaoCount = 0;
+      let diMuonCount = 0;
+      let nghiNuaBuoiCount = 0;
+
+      // Phân loại từng nhân viên theo Q4 answer
+      shiftEmployees.forEach(row => {
+        const q4Answer = cellToString(row, getAnswerColForQuestionIndex(0));
+        
+        let mappedGroup = 'Đi làm bình thường';
+        
+        if (question4Mapping && q4Answer && question4Mapping[q4Answer]) {
+          mappedGroup = question4Mapping[q4Answer];
+        }
+        
+        switch (mappedGroup) {
+          case 'Đi làm bình thường':
+            diLamBinhThuongCount++;
+            break;
+          case 'Nghỉ phép':
+            nghiPhepCount++;
+            break;
+          case 'Nghỉ không lương':
+            nghiKhongLuongCount++;
+            break;
+          case 'Nghỉ khác':
+            nghiKhacCount++;
+            break;
+          case 'Đi đào tạo':
+            diDaoTaoCount++;
+            break;
+          case 'Đi muộn':
+            diMuonCount++;
+            break;
+          case 'Nghỉ nửa buổi':
+            nghiNuaBuoiCount++;
+            break;
+          default:
+            diLamBinhThuongCount++;
+        }
+      });
+
+      const totalDiLam = diLamBinhThuongCount + diMuonCount + nghiNuaBuoiCount + diDaoTaoCount;
+      const totalNghi = nghiPhepCount + nghiKhongLuongCount + nghiKhacCount;
+
+      attendanceReport += `- Đi làm: ${totalDiLam.toLocaleString()}\n`;
+      attendanceReport += `- Total nghỉ: ${totalNghi.toLocaleString()}\n`;
+      attendanceReport += `Chi tiết:\n`;
+      attendanceReport += `- Nghỉ phép: ${nghiPhepCount.toLocaleString()}\n`;
+      attendanceReport += `- Nghỉ không lương: ${nghiKhongLuongCount.toLocaleString()}\n`;
+      attendanceReport += `- Nghỉ khác (ốm, hiếu, vợ sinh, khám thai): ${nghiKhacCount.toLocaleString()}\n`;
+      attendanceReport += `- Đi đào tạo: ${diDaoTaoCount.toLocaleString()}\n`;
+      attendanceReport += `- Đi muộn: ${diMuonCount.toLocaleString()}\n`;
+      attendanceReport += `- Nghỉ nửa buổi: ${nghiNuaBuoiCount.toLocaleString()}\n\n`;
+    });
+    
+    return {
+      success: true,
+      report: {
+        pendingReport: pendingReport,
+        attendanceReport: attendanceReport
+      }
+    };
+    
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+// ✅ TỐI ƯU BẢO MẬT: Hash SHA-256 + backward compatible với plaintext cũ
+// Hàm hash mật khẩu
+function hashPassword(plain) {
+  const raw = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256, plain, Utilities.Charset.UTF_8
+  );
+  return raw.map(function(b) {
+    return ('0' + (b & 0xFF).toString(16)).slice(-2);
+  }).join('');
+}
+
+/**
+ * Verify admin password for a given GEN.
+ * ✅ Hỗ trợ cả 2 chế độ: plaintext (cũ) và hash SHA-256 (mới)
+ * Returns: { success: true, matched: bool, hasPassword: bool }
+ */
+function verifyAdminPassword(genCode, passwordPlain) {
+  try {
+    if (!genCode) return { success: false, error: 'Missing gen' };
+    const sheet = getSheetByName(CONFIG.SHEETS.EMPLOYEE_MASTER);
+    const data = sheet.getDataRange().getValues();
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      const rowGen = row[CONFIG.COLUMNS.EMPLOYEE_MASTER.GEN];
+      if (rowGen != null && String(rowGen).trim() === String(genCode).trim()) {
+        // cột H => index 7
+        const stored = row[7];
+        const storedStr = (stored == null) ? '' : String(stored).trim();
+        const hasPassword = storedStr !== '';
+        const inputPlain = String(passwordPlain || '');
+        const inputHash = hashPassword(inputPlain);
+
+        // ✅ Backward compatible: so sánh cả plaintext và hash
+        // - Nếu storedStr dài 64 ký tự hex → là hash SHA-256
+        // - Nếu ngắn hơn → là plaintext (cũ)
+        const isHashed = /^[0-9a-f]{64}$/i.test(storedStr);
+        let matched = false;
+        if (hasPassword) {
+          if (isHashed) {
+            matched = storedStr.toLowerCase() === inputHash.toLowerCase();
+          } else {
+            // Plaintext cũ - so sánh trực tiếp
+            matched = storedStr === inputPlain;
+          }
+        }
+        return { success: true, matched: matched, hasPassword: hasPassword };
+      }
+    }
+    return { success: false, error: 'GEN not found' };
+  } catch (err) {
+    Logger.log('verifyAdminPassword error: ' + (err && err.message));
+    return { success: false, error: err.message || String(err) };
+  }
+}
+
+// ===== HÀM HỖ TRỢ: Chuyển đổi mật khẩu plaintext cũ sang hash =====
+// Chạy 1 lần trong Google Apps Script editor để migrate tất cả mật khẩu sang hash
+function migratePasswordsToHash() {
+  try {
+    const sheet = getSheetByName(CONFIG.SHEETS.EMPLOYEE_MASTER);
+    const data = sheet.getDataRange().getValues();
+    let migrated = 0;
+
+    for (let i = 1; i < data.length; i++) {
+      const stored = data[i][7]; // cột H
+      const storedStr = (stored == null) ? '' : String(stored).trim();
+
+      // Bỏ qua nếu rỗng hoặc đã là hash (64 hex chars)
+      if (!storedStr || /^[0-9a-f]{64}$/i.test(storedStr)) continue;
+
+      // Hash plaintext và ghi lại
+      const hashed = hashPassword(storedStr);
+      sheet.getRange(i + 1, 8).setValue(hashed);
+      migrated++;
+    }
+
+    Logger.log(`Đã migrate ${migrated} mật khẩu sang hash SHA-256`);
+    return { success: true, migrated: migrated };
+  } catch (err) {
+    Logger.log('migratePasswordsToHash error: ' + err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+
+function getSurveyHistoryByGen(genCode, dateFrom, dateTo) {
+  try {
+    if (!genCode) throw new Error('GEN không được để trống');
+
+    const targetGen = String(genCode).trim();
+
+    // Parse date range
+    const fromDate = parseDateString(dateFrom);
+    const toDate = parseDateString(dateTo);
+
+    if (!fromDate) throw new Error('Ngày bắt đầu không hợp lệ');
+    if (!toDate) throw new Error('Ngày kết thúc không hợp lệ');
+
+    // Đảm bảo fromDate <= toDate
+    if (fromDate.getTime() > toDate.getTime()) {
+      throw new Error('Ngày bắt đầu phải nhỏ hơn hoặc bằng ngày kết thúc');
+    }
+
+    // Đọc Survey_Results
+    const surveyData = getSheetData(CONFIG.SHEETS.SURVEY_RESULTS);
+
+    // Đọc Q4 mapping
+    const question4MappingRaw = getQuestion4Mapping();
+    const question4Mapping = {};
+    Object.keys(question4MappingRaw || {}).forEach(k => {
+      const v = question4MappingRaw[k];
+      question4Mapping[k] = (v && v.group) ? String(v.group) : '';
+    });
+
+    // Detect header
+    let startIndex = 0;
+    const firstRow = surveyData[0];
+    if (Array.isArray(firstRow) && firstRow.length >= 3) {
+      const cellA1 = String(firstRow[0] || '').trim().toLowerCase();
+      const cellC1 = String(firstRow[SR_COL.GEN] || '').trim().toLowerCase();
+      if (cellA1 === 'timestamp' && cellC1 === 'gen') startIndex = 1;
+    }
+
+    const results = [];
+    let userName = '';
+
+    for (let i = startIndex; i < surveyData.length; i++) {
+      const row = surveyData[i];
+      if (!row) continue;
+
+      // Lọc theo GEN
+      const rowGen = cellToString(row, SR_COL.GEN);
+      if (rowGen !== targetGen) continue;
+
+      // Lấy tên nhân viên (từ bản ghi đầu tiên khớp GEN)
+      if (!userName) {
+        userName = cellToString(row, SR_COL.NAME);
+      }
+
+      // Lọc theo ngày
+      const rowDateCell = row[SR_COL.SURVEY_DATE];
+      const rowDate = normalizeToDateOnly(rowDateCell);
+      if (!rowDate) continue;
+
+      if (rowDate.getTime() < fromDate.getTime()) continue;
+      if (rowDate.getTime() > toDate.getTime()) continue;
+
+      // Lấy Q4 answer và mapped group
+      const q4Answer = cellToString(row, getAnswerColForQuestionIndex(0));
+      const q4Reason = cellToString(row, getReasonColForQuestionIndex(0));
+      const mappedGroup = question4Mapping[q4Answer] || q4Answer;
+
+      // Lọc: chỉ lấy các bản ghi <> "Đi làm bình thường"
+      if (mappedGroup === 'Đi làm bình thường') continue;
+
+      // Lấy Q3 (ca làm việc)
+      const q3Answer = cellToString(row, SR_COL.Q3);
+
+      // Format timestamp thành dd/MM/yyyy HH:mm
+      let timestampStr = '';
+      const tsCell = row[SR_COL.TIMESTAMP];
+      let tsDate = null;
+      if (tsCell instanceof Date && !isNaN(tsCell.getTime())) {
+        tsDate = tsCell;
+      } else if (tsCell) {
+        const parsed = parseDateString(String(tsCell));
+        if (parsed) tsDate = parsed;
+      }
+      if (tsDate) {
+        const dd = String(tsDate.getDate()).padStart(2, '0');
+        const mm = String(tsDate.getMonth() + 1).padStart(2, '0');
+        const yyyy = tsDate.getFullYear();
+        const hh = String(tsDate.getHours()).padStart(2, '0');
+        const min = String(tsDate.getMinutes()).padStart(2, '0');
+        timestampStr = dd + '/' + mm + '/' + yyyy + ' ' + hh + ':' + min;
+      }
+
+      // Format ngày khảo sát thành dd/MM/yyyy
+      const dd = String(rowDate.getDate()).padStart(2, '0');
+      const mm = String(rowDate.getMonth() + 1).padStart(2, '0');
+      const yyyy = rowDate.getFullYear();
+      const formattedDate = dd + '/' + mm + '/' + yyyy;
+
+      results.push({
+        surveyDate: formattedDate,
+        shift: q3Answer,
+        leaveType: q4Answer,
+        reason: q4Reason,
+        timestamp: timestampStr,
+        sortDate: rowDate.getTime()
+      });
+    }
+
+    // Sắp xếp theo ngày tăng dần (cũ → mới)
+    results.sort(function(a, b) { return a.sortDate - b.sortDate; });
+
+    return {
+      success: true,
+      data: results,
+      userName: userName,
+      genCode: targetGen
+    };
+
+  } catch (error) {
+    Logger.log('Error in getSurveyHistoryByGen: ' + error.message);
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+// ===== EXPORT FUNCTIONS =====
+
+// Helper: escape CSV value (handle commas, quotes, newlines)
+function csvEscape(value) {
+  const s = String(value == null ? '' : value);
+  // Ép TẤT CẢ giá trị thành text bằng ="..." để Excel không tự convert sang number
+  // (ví dụ GEN 01234567 sẽ giữ nguyên số 0 đầu)
+  // Escape dấu nháy kép thành "" (quy tắc CSV) trước khi bọc trong ="..."
+  return '="' + s.replace(/"/g, '""') + '"';
+}
+
+// Export all employees as CSV (Admin only)
+// Columns: Name, Gen, Leader_code, Leader_name
+function exportAllEmployeesCSV() {
+  try {
+    const employeeData = getSheetData(CONFIG.SHEETS.EMPLOYEE_MASTER);
+
+    const headers = ['Name', 'Gen', 'Leader_code', 'Leader_name'];
+    const rows = [];
+    rows.push(headers.map(csvEscape).join(','));
+
+    for (let i = 1; i < employeeData.length; i++) {
+      const row = employeeData[i];
+      const resigned = cellToString(row, CONFIG.COLUMNS.EMPLOYEE_MASTER.RESIGNED);
+      if (resigned) continue; // Skip resigned employees
+
+      const name = cellToString(row, CONFIG.COLUMNS.EMPLOYEE_MASTER.NAME);
+      const gen = cellToString(row, CONFIG.COLUMNS.EMPLOYEE_MASTER.GEN);
+      const leaderCode = cellToString(row, CONFIG.COLUMNS.EMPLOYEE_MASTER.LEADER_ID);
+      const leaderName = cellToString(row, CONFIG.COLUMNS.EMPLOYEE_MASTER.LEADER_NAME);
+
+      rows.push([name, gen, leaderCode, leaderName].map(csvEscape).join(','));
+    }
+
+    // BOM (\uFEFF) for UTF-8 Excel compatibility + \r\n line endings
+    const csv = '\uFEFF' + rows.join('\r\n');
+
+    const today = new Date();
+    const dateStr = today.getFullYear() +
+      String(today.getMonth() + 1).padStart(2, '0') +
+      String(today.getDate()).padStart(2, '0');
+
+    return {
+      success: true,
+      csv: csv,
+      filename: 'DanhSachNhanVien_' + dateStr + '.csv',
+      count: rows.length - 1
+    };
+  } catch (error) {
+    Logger.log('Error in exportAllEmployeesCSV: ' + error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+// Export survey results by date range as CSV (Leader+)
+// Returns all Survey_Results columns, filtered by date range
+function exportSurveyResultsCSV(dateFrom, dateTo) {
+  try {
+    const fromDate = parseDateString(dateFrom);
+    const toDate = parseDateString(dateTo);
+
+    if (!fromDate) throw new Error('Ngày bắt đầu không hợp lệ');
+    if (!toDate) throw new Error('Ngày kết thúc không hợp lệ');
+    if (fromDate.getTime() > toDate.getTime()) {
+      throw new Error('Ngày bắt đầu phải nhỏ hơn hoặc bằng ngày kết thúc');
+    }
+
+    const surveyData = getSheetData(CONFIG.SHEETS.SURVEY_RESULTS);
+    if (surveyData.length < 1) {
+      return { success: false, error: 'Không có dữ liệu khảo sát' };
+    }
+
+    const headers = surveyData[0];
+    const rows = [];
+    rows.push(headers.map(csvEscape).join(','));
+
+    let count = 0;
+    for (let i = 1; i < surveyData.length; i++) {
+      const row = surveyData[i];
+      const rowDateCell = row[SR_COL.SURVEY_DATE];
+      const rowDate = normalizeToDateOnly(rowDateCell);
+      if (!rowDate) continue;
+      if (rowDate.getTime() < fromDate.getTime()) continue;
+      if (rowDate.getTime() > toDate.getTime()) continue;
+
+      rows.push(row.map(csvEscape).join(','));
+      count++;
+    }
+
+    // BOM for UTF-8 Excel compatibility
+    const csv = '\uFEFF' + rows.join('\r\n');
+
+    const fromStr = String(dateFrom).replace(/\//g, '-');
+    const toStr = String(dateTo).replace(/\//g, '-');
+
+    return {
+      success: true,
+      csv: csv,
+      filename: 'KetQuaKhaoSat_' + fromStr + '_' + toStr + '.csv',
+      count: count
+    };
+  } catch (error) {
+    Logger.log('Error in exportSurveyResultsCSV: ' + error.message);
+    return { success: false, error: error.message };
+  }
+}
+function syncToFileB_daily() {
+  const SOURCE_SPREADSHEET_ID = "1NyopLvnwHltt_HUwFxXmBu2M1WOLZQe_IU_tM6CtlI8";
+  const SOURCE_SHEET = "Employee_Master";
+
+  const TARGET_SPREADSHEET_ID = "1vEBgTjHTSc6F5Th-6b3pMvMCChSTp8hiSkVKL0e6Khw";
+  const TARGET_SHEET = "DS Leader";
+
+  const LOCAL_SHEET_A = "UserAuth";
+
+  const props = PropertiesService.getScriptProperties();
+
+  // ===== 1. LẤY DATA TỪ FILE NGUỒN =====
+  const sourceSheet = SpreadsheetApp
+    .openById(SOURCE_SPREADSHEET_ID)
+    .getSheetByName(SOURCE_SHEET);
+
+  if (!sourceSheet) {
+    throw new Error(`Không tìm thấy sheet "${SOURCE_SHEET}"`);
+  }
+
+  const lastRow = sourceSheet.getLastRow();
+  if (lastRow <= 1) return; // chỉ có header
+
+  const data = sourceSheet.getRange(1, 1, lastRow, 4).getValues();
+
+  // ===== 2. HASH CHECK =====
+  const newHash = Utilities.base64Encode(
+    Utilities.computeDigest(
+      Utilities.DigestAlgorithm.MD5,
+      JSON.stringify(data)
+    )
+  );
+
+  const oldHash = props.getProperty("SYNC_HASH_EMPLOYEE");
+
+  if (newHash === oldHash) {
+    Logger.log("No change → skip toàn bộ");
+    return;
+  }
+
+  // ===== 3. MỞ FILE ĐÍCH =====
+  const targetSS = SpreadsheetApp.openById(TARGET_SPREADSHEET_ID);
+
+  const targetSheet = targetSS.getSheetByName(TARGET_SHEET);
+  if (!targetSheet) {
+    throw new Error(`Không tìm thấy sheet "${TARGET_SHEET}"`);
+  }
+
+  const sheetA = targetSS.getSheetByName(LOCAL_SHEET_A);
+  if (!sheetA) {
+    throw new Error(`Không tìm thấy sheet "${LOCAL_SHEET_A}"`);
+  }
+
+  // ===== 4. SYNC SANG DS Leader =====
+  const maxRows = targetSheet.getMaxRows();
+
+  // Clear cột F:I
+  targetSheet.getRange(1, 6, maxRows, 4).clearContent();
+
+  // Ghi dữ liệu từ F1
+  targetSheet.getRange(1, 6, data.length, data[0].length).setValues(data);
+
+  // ===== 5. UPDATE UserAuth =====
+  const lastRowA = sheetA.getLastRow();
+  const lastRowB = targetSheet.getLastRow();
+
+  // Lấy ID đã có trong UserAuth (cột A)
+  const dataA = lastRowA > 1
+    ? sheetA.getRange(2, 1, lastRowA - 1, 1).getValues()
+    : [];
+
+  // Lấy ID từ DS Leader (cột G)
+  const dataB = lastRowB > 1
+    ? targetSheet.getRange(2, 7, lastRowB - 1, 1).getValues()
+    : [];
+
+  // Tạo Set chứa ID hiện có
+  const existingIDs = new Set(
+    dataA.flat().filter(String)
+  );
+
+  // Lọc ID mới
+  const newIDs = dataB
+    .flat()
+    .filter(id => id && !existingIDs.has(id));
+
+  // Ghi thêm ID mới
+  if (newIDs.length > 0) {
+    const values = newIDs.map(id => [id]);
+
+    sheetA
+      .getRange(lastRowA + 1, 1, values.length, 1)
+      .setValues(values);
+
+    Logger.log(`Added ${newIDs.length} new IDs`);
+  } else {
+    Logger.log("Không có ID mới");
+  }
+
+  // ===== 6. LƯU HASH =====
+  props.setProperty("SYNC_HASH_EMPLOYEE", newHash);
+
+  Logger.log("Done sync + update UserAuth");
+}
+function deleteOldSurveyRecords() {
+  try {
+    Logger.log('=== START deleteOldSurveyRecords (optimized) ===');
+
+    const sheet = getSheetByName(CONFIG.SHEETS.SURVEY_RESULTS);
+    const lastRow = sheet.getLastRow();
+    const lastCol = sheet.getLastColumn();
+
+    if (lastRow < 2) {
+      Logger.log('No data rows to process (lastRow=' + lastRow + ')');
+      return { success: true, deleted: 0, message: 'Không có dữ liệu để xóa' };
+    }
+
+    // Tính cutoff date: tháng hiện tại - 2
+    const now = new Date();
+    const cutoffYear = now.getFullYear();
+    const cutoffMonth = now.getMonth() - 2; // 0-based
+    const cutoffDate = new Date(cutoffYear, cutoffMonth + 1, 0); // ngày cuối của tháng cutoff
+    cutoffDate.setHours(23, 59, 59, 999);
+
+    Logger.log('Cutoff date: ' + cutoffDate.toLocaleString());
+
+    // Bước 1: Đọc toàn bộ dữ liệu 1 lần (1 lệnh API)
+    const data = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+
+    // Bước 2: Lọc trong bộ nhớ - giữ header + các dòng có ngày > cutoff
+    const keptRows = [data[0]]; // Luôn giữ dòng header (dòng 0)
+    let deletedCount = 0;
+
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      if (!row) continue;
+
+      const surveyDateCell = row[SR_COL.SURVEY_DATE]; // Cột G (index 6)
+      const surveyDate = normalizeToDateOnly(surveyDateCell);
+
+      if (!surveyDate) {
+        // Không parse được ngày → GIỮ lại (an toàn, không xóa nhầm)
+        keptRows.push(row);
+        continue;
+      }
+
+      if (surveyDate.getTime() <= cutoffDate.getTime()) {
+        // Cũ hơn cutoff → KHÔNG giữ (tương đương xóa)
+        deletedCount++;
+      } else {
+        // Mới hơn cutoff → giữ lại
+        keptRows.push(row);
+      }
+    }
+
+    if (deletedCount === 0) {
+      Logger.log('No rows to delete (all records are newer than cutoff)');
+      return { success: true, deleted: 0, message: 'Không có bản ghi nào cũ hơn cutoff' };
+    }
+
+    Logger.log('Rows to delete: ' + deletedCount + ', rows to keep: ' + keptRows.length);
+
+    // Bước 3: Xóa nội dung toàn bộ sheet (1 lệnh API - chỉ xóa values, GIỮ format)
+    sheet.getRange(1, 1, lastRow, lastCol).clearContent();
+
+    // Bước 4: Ghi lại chỉ các dòng được giữ (1 lệnh API)
+    sheet.getRange(1, 1, keptRows.length, lastCol).setValues(keptRows);
+
+    // Bước 5: Xóa các dòng thừa ở dưới (1 lệnh API - nếu có dòng bị xóa thì sẽ thừa dòng trống)
+    if (keptRows.length < lastRow) {
+      sheet.deleteRows(keptRows.length + 1, lastRow - keptRows.length);
+    }
+
+    Logger.log('=== END deleteOldSurveyRecords: deleted ' + deletedCount + ' rows ===');
+    return {
+      success: true,
+      deleted: deletedCount,
+      cutoffDate: cutoffDate.toISOString(),
+      message: 'Đã xóa ' + deletedCount + ' bản ghi cũ hơn 2 tháng'
+    };
+
+  } catch (error) {
+    Logger.log('Error in deleteOldSurveyRecords: ' + error.message);
+    return { success: false, error: error.message };
+  }
+}
+/**
+ * Tạo time-based trigger chạy vào 02h00 ngày 10 hàng tháng
+ * Chạy hàm này 1 lần trong GAS editor để cài đặt trigger
+ * (Nếu chạy lại sẽ xóa trigger cũ trước khi tạo mới - tránh trùng lặp)
+ */
+function setupMonthlyCleanupTrigger() {
+  try {
+    // Xóa tất cả trigger cũ của hàm deleteOldSurveyRecords (tránh trùng lặp)
+    const triggers = ScriptApp.getProjectTriggers();
+    triggers.forEach(function(t) {
+      if (t.getHandlerFunction() === 'deleteOldSurveyRecords') {
+        ScriptApp.deleteTrigger(t);
+      }
+    });
+
+    // Tạo trigger mới: chạy vào 02h00 ngày 10 hàng tháng
+    ScriptApp.newTrigger('deleteOldSurveyRecords')
+      .timeBased()
+      .onMonthDay(10)       // Ngày 10
+      .atHour(2)            // 02h00
+      .create();
+
+    Logger.log('✓ Monthly cleanup trigger created: runs at 02:00 on day 10 of each month');
+    return { success: true, message: 'Đã tạo trigger chạy vào 02h00 ngày 10 hàng tháng' };
+  } catch (error) {
+    Logger.log('Error in setupMonthlyCleanupTrigger: ' + error.message);
+    return { success: false, error: error.message };
+  }
+}
